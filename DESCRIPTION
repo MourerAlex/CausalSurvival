@@ -1,0 +1,36 @@
+Package: CausalSurvival
+Title: Causal Inference for Single-Event Survival Outcomes
+Version: 0.1.0
+Authors@R: c(
+    person("Alex", "Mourer", role = c("aut", "cre"),
+           email = "MourerAlex@users.noreply.github.com")
+    )
+Description: Discrete-time pooled logistic regression estimators for causal
+    survival analysis with a single failure event and right censoring.
+    Implements the parametric g-formula (plug-in) and inverse probability
+    weighting (IPW) for cumulative incidence under static, baseline-only
+    treatment regimes, following Hernán and Robins (Causal Inference: What
+    If). Provides bootstrap percentile confidence intervals, identifying
+    assumption accessors, and weight diagnostics. Designed as the foundation
+    of a two-package ecosystem with CausalCompetingRisks, which extends to
+    competing events via the separable-effects framework.
+License: MIT + file LICENSE
+URL: https://github.com/MourerAlex/CausalSurvival
+BugReports: https://github.com/MourerAlex/CausalSurvival/issues
+Depends:
+    R (>= 4.1.0)
+Imports:
+    future.apply,
+    ggplot2,
+    patchwork,
+    stats,
+    survival
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+VignetteBuilder: knitr

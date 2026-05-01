@@ -1,0 +1,11 @@
+^dev$
+^\.claude$
+^\.Rhistory$
+^\.RData$
+^.*\.pdf$
+^\.Rproj\.user$
+^LICENSE\.md$
+^.*\.Rproj$
+^README\.Rmd$
+^_pkgdown\.yml$
+^docs$

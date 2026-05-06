@@ -4,7 +4,9 @@ Live artifact tracking the dependency-ordered port of 17 functions from
 CausalCompetingRisks (CCR) to CausalSurvival, per spec §12.3
 (`../../separable_effects/dev/CAUSAL_SURVIVAL_SPEC.md`).
 
-Updated as functions are ported. Status: **port in progress (hazards.R + weights.R done).**
+Updated as functions are ported. Status: **Phase 1 port complete** — all
+port-set functions either ported or deferred (snap_time, weighted_hazard_by_k).
+Next: Phase 2 (trap-fresh-writes) and Phase 3 (public API).
 
 ---
 
@@ -15,8 +17,11 @@ CLEAN-MOVE classification:
 
 1. **`validate_person_time`** hardcodes `d_flag` as a required column
    (`R/validate.R:313` in CCR). CausalSurvival has no D event — this errors
-   on every CausalSurvival pt_data. **Action:** reclassify as TRAP-FORK or
-   parameterize the flag list. Spec §12.3 patch needed.
+   on every CausalSurvival pt_data. **Resolved during port** as TRAP-FORK:
+   `d_flag` dropped from required-cols + flag-validation loop; treatment
+   check tightened from `length(unique) == 2` to `setequal(c(0,1))` to
+   match downstream IPW contract. Two copies of a small validator are
+   honest — the packages have legitimately different domain models.
 
 2. **`summarize_weights` + `apply_weight_truncation`** hardcode SE arm-weight
    names (`w_d_arm_10`, `w_y_arm_10`, …) in their `intersect()` lookup
@@ -36,13 +41,13 @@ CLEAN-MOVE classification:
 
 | Function | File (CCR origin) | Status | Note |
 |---|---|---|---|
-| `%\|\|%` | utils.R | pending | |
-| `snap_time` | accessors.R | pending | |
+| `%\|\|%` | utils.R | **ported** (R/utils.R) | |
+| `snap_time` | accessors.R | **deferred to Phase 3** | only callers (`contrast()`, `summary()`) are Phase-3 surface; re-port when those land |
 | `cumprod_survival` | hazards.R | **ported** (R/hazards.R) | doc tightened: time-order precondition |
 | `predict_with_warning` | gformula_core.R → **hazards.R** | **ported** (R/hazards.R) | moved file (logical home is hazards.R) |
-| `weighted_hazard_by_k` | ipw_core.R | pending | |
-| `check_covariate_quality` | validate.R | pending | |
-| `validate_input_shape` | validate.R | pending | |
+| `weighted_hazard_by_k` | ipw_core.R | **deferred** | non-parametric Hajek estimator; v1 IPW path is parametric MSM (`fit_logistic` + `predict_counterfactual_hazard`), so no v1 caller. Re-port if v1.x adds a non-parametric (weighted-KM-style) IPW method |
+| `check_covariate_quality` | validate.R | **ported** (R/validate.R) | NA + unsupported-type promoted to hard errors (was warnings in CCR) |
+| `validate_input_shape` | validate.R | **ported** (R/validate.R) | |
 | `check_fitted_positivity` | hazards.R | **ported** (R/hazards.R) | |
 | `ipw` | weights.R | **ported** (R/weights.R) | `truncate` arg dropped (dead code); `check_prob_vec` helper extracted |
 | `ipw_static_trt` | weights.R | **ported** (R/weights.R) | assumes `A ∈ {0,1}` (Option B, standardized in `to_person_time`); `match()` broadcast replaces named-vector lookup |
@@ -58,7 +63,7 @@ CLEAN-MOVE classification:
 | `fit_logistic` | `check_fitted_positivity` | hazards.R | **ported** (R/hazards.R) | docstring de-CCR'd |
 | `predict_counterfactual_hazard` | `predict_with_warning` | hazards.R | **ported** (R/hazards.R) | renamed from `predict_hazard_under`; signature now requires `label` |
 | `ipw_cens` | `ipw` | weights.R | **ported** (R/weights.R) | `truncate` arg dropped (consistent with `ipw()`); `model_num` retained for v1.1 stabilized-IPCW path (Phase 3 wires `c ~ A` per H&R §12.6) |
-| `validate_person_time` | `check_covariate_quality` | validate.R | pending | ⚠️ red flag #1 (hardcodes `d_flag`) |
+| `validate_person_time` | `check_covariate_quality` | validate.R | **ported** (R/validate.R) | red flag #1 resolved as TRAP-FORK: `d_flag` dropped, treatment tightened to `{0,1}` (matches downstream IPW contract) |
 
 ---
 
@@ -66,7 +71,7 @@ CLEAN-MOVE classification:
 
 | Function | Internal dep | File | Status |
 |---|---|---|---|
-| `fit_propensity` | `fit_logistic` | propensity.R | pending |
+| `fit_propensity` | `fit_logistic` | propensity.R | **ported** (R/propensity.R) |
 
 ---
 
@@ -128,3 +133,7 @@ IPW pipeline (parallel branch):
   - `check_prob_vec()` helper extracted at top of `weights.R`
   - `match()` broadcast replaces named-vector lookup in `ipw_static_trt`
   - `summarize_weights` adds p001/p01 for symmetric tail diagnostics
+  - `check_covariate_quality`: NA + unsupported-type promoted from
+    warnings to hard errors (glm-breaking otherwise)
+  - `validate_person_time` treatment check tightened from
+    `length(unique) == 2` to `setequal(c(0,1))`

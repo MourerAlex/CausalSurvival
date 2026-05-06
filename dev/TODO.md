@@ -21,6 +21,27 @@ Extension path when needed:
 No architectural lock-in from the current binary-only choice — the
 standardization site is the only place that needs to relax.
 
+## Treatment label preservation for display
+
+Treatment is standardized to `{0, 1}` numerically (Option B) — clean
+for downstream compute (`ipw_static_trt`, glm positive class,
+counterfactual assignments). But the user's original labels
+(e.g. `c("ctrl", "trt")`) are lost.
+
+Plan:
+
+- `to_person_time()` stashes `attr(pt_data, "treatment_levels") <-
+  c(<level for A=0>, <level for A=1>)` on the returned object.
+- Phase 3 `print()` / `summary()` / `plot()` consult the attribute and
+  relabel arms for display. Falls back to `"0"` / `"1"` if attribute
+  missing.
+- Users who bypass `to_person_time()` and supply their own pt_data must
+  pre-code `{0, 1}` (validator enforces). v1.1: optional
+  `treatment_levels = c("Control", "Treated")` arg on the public entry
+  point as a fallback for that case.
+
+Compute path stays plain — labels are presentation-only metadata.
+
 ## Phase 3 design points (not blocking the port)
 
 ### Stabilization is a single joint switch in v1

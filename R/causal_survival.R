@@ -281,8 +281,7 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
 
   list(
     estimates    = estimates,
-    models       = list(y = model_y, c = NULL, A = NULL,
-                        A_num = NULL, c_num = NULL),
+    models       = list(y = model_y, c = NULL, A = NULL, A_num = NULL),
     model_checks = fit$checks,
     weights      = NULL
   )
@@ -354,5 +353,40 @@ fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
     }
   }
 
-  stop("fit_ipw: WIP — weight construction not yet wired", call. = FALSE)
+  # ---------- 3. Build raw weights ----------
+  w_a_raw <- ipw_static_trt(
+    model_full    = model_a,
+    pt_data       = pt_data,
+    treatment_col = treatment_col,
+    id_col        = id_col,
+    model_num     = model_a_num
+  )
+  w_cens_raw <- if (ipcw) {
+    ipw_cens(model_c, pt_data, id_col, model_num = model_c_num)
+  } else {
+    NULL
+  }
+
+  # Stash raw + working columns. apply_weight_truncation() clips w_a /
+  # w_cens; the *_raw columns are preserved so reweight() can re-apply
+  # truncation without refitting the upstream models.
+  pt_data$w_a_raw <- w_a_raw
+  pt_data$w_a     <- w_a_raw
+  if (ipcw) {
+    pt_data$w_cens_raw <- w_cens_raw
+    pt_data$w_cens     <- w_cens_raw
+  }
+
+  # ---------- 4. Truncation ----------
+  trunc_out <- apply_weight_truncation(
+    pt_data  = pt_data,
+    id_col   = id_col,
+    truncate = truncate
+  )
+  pt_data <- trunc_out$pt_data
+
+  # ---------- 5. Combined per-row weight for the Y-MSM ----------
+  combined_w <- if (ipcw) pt_data$w_a * pt_data$w_cens else pt_data$w_a
+
+  stop("fit_ipw: WIP — Y-MSM not yet wired", call. = FALSE)
 }

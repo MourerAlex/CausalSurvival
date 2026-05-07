@@ -4,12 +4,22 @@ Live artifact tracking the dependency-ordered port of 17 functions from
 CausalCompetingRisks (CCR) to CausalSurvival, per spec §12.3
 (`../../separable_effects/dev/CAUSAL_SURVIVAL_SPEC.md`).
 
-Updated as functions are ported. Status: **Phase 1 + Phase 2 complete**
-— all port-set functions either ported or deferred (snap_time,
-weighted_hazard_by_k, cum_inc_from_weighted); Phase 2 trap-fresh-writes
-landed (`to_person_time`, `validate_subject_level`, `standardize_treatment`,
-`fit_hazard_models`). Next: Phase 3 (public API: `causal_survival()`,
-accessors, bootstrap).
+Updated as functions are ported. Status: **Phase 3 in progress**.
+Phase 1 + Phase 2 complete — all port-set functions either ported or
+deferred (snap_time, weighted_hazard_by_k, cum_inc_from_weighted); Phase 2
+trap-fresh-writes landed (`to_person_time`, `validate_subject_level`,
+`standardize_treatment`, `fit_hazard_models`).
+
+Phase 3 progress:
+- `causal_survival()` skeleton: signature + arg validation written; worker
+  dispatch + S3 fit object assembly pending.
+- G-formula path: `make_clone` (TRAP-GENERALIZE #4, inlined fresh-write —
+  single-event simplification of CCR's two-arm clone) + `fit_gformula`
+  worker written. CIF math validated against gfoRmula's `simulate.R`
+  (per-subject `poprisk_i = cumsum(h * S(t-1))` ↔ ours `1 - mean_i S_i(t)`,
+  algebraically identical for single event).
+- IPW path: not yet started.
+- Accessors / bootstrap / S3 methods: not yet started.
 
 ---
 

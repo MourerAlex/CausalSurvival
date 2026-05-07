@@ -223,3 +223,136 @@ validate_person_time <- function(pt_data,
 
   invisible(TRUE)
 }
+
+
+#' Validate Subject-Level Input
+#'
+#' Checks subject-level data (one row per subject) before person-time
+#' construction in [to_person_time()]. Hard-errors on structural problems
+#' that would corrupt the long-format output or downstream estimation.
+#'
+#' @param data A data.frame in subject-level format.
+#' @param id,time,status,treatment Character. Column names.
+#' @param covariates Character vector of baseline covariate column names.
+#' @param cut_points `NULL`, a length-1 positive integer (number of
+#'   equi-spaced intervals), or a numeric vector of length >= 2 (explicit
+#'   interior cut points strictly within `(0, max(time))`).
+#' @param time_varying Reserved for future use. Must be `NULL` in v1.
+#'
+#' @return Invisibly `TRUE` on success.
+#'
+#' @details
+#' ## Hard errors
+#' - Missing required columns
+#' - `id`: NAs or duplicates (one row per subject)
+#' - `time`: not numeric, negative, or NAs
+#' - `status`: not in `{0, 1}`, or NAs
+#' - `treatment`: NAs, fewer than 2 levels, or more than 2 levels
+#' - covariates: NAs or unsupported types (via [check_covariate_quality()])
+#' - `cut_points`: invalid form, non-integer scalar, non-increasing
+#'   vector, or values outside `(0, max(time))`
+#' - `time_varying != NULL`
+#'
+#' @keywords internal
+validate_subject_level <- function(data, id, time, status, treatment,
+                                   covariates, cut_points, time_varying) {
+
+  # --- v1 block ---
+  if (!is.null(time_varying)) {
+    stop("time_varying covariates are not supported in v1.", call. = FALSE)
+  }
+
+  # --- Required columns present ---
+  required <- c(id, time, status, treatment, covariates)
+  missing_cols <- setdiff(required, names(data))
+  if (length(missing_cols) > 0) {
+    stop("Subject-level data is missing required column(s): ",
+         paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+
+  # --- id: no NAs, no duplicates ---
+  if (any(is.na(data[[id]]))) {
+    stop("Column '", id, "' contains NA values.", call. = FALSE)
+  }
+  if (anyDuplicated(data[[id]]) > 0) {
+    stop("Column '", id, "' contains duplicate values. ",
+         "Subject-level data must have one row per subject.",
+         call. = FALSE)
+  }
+
+  # --- time: numeric, non-negative, no NAs ---
+  t_vals <- data[[time]]
+  if (!is.numeric(t_vals)) {
+    stop("Column '", time, "' must be numeric. Got: ",
+         class(t_vals)[1], call. = FALSE)
+  }
+  if (any(is.na(t_vals))) {
+    stop("Column '", time, "' contains NA values.", call. = FALSE)
+  }
+  if (any(t_vals < 0)) {
+    stop("Column '", time, "' contains negative values.", call. = FALSE)
+  }
+
+  # --- status: {0, 1}, no NAs ---
+  s_vals <- data[[status]]
+  if (any(is.na(s_vals))) {
+    stop("Column '", status, "' contains NA values.", call. = FALSE)
+  }
+  if (!all(s_vals %in% c(0, 1))) {
+    stop("Column '", status, "' must contain only 0 and 1. ",
+         "Found: ", paste(unique(s_vals), collapse = ", "),
+         call. = FALSE)
+  }
+
+  # --- treatment: NAs + 2 unique levels ---
+  if (any(is.na(data[[treatment]]))) {
+    stop("Column '", treatment, "' contains NA values.", call. = FALSE)
+  }
+  trt_vals <- unique(data[[treatment]])
+  if (length(trt_vals) > 2) {
+    stop("Column '", treatment, "' has more than 2 unique values. ",
+         "Multi-arm treatment is not supported in v1. Found: ",
+         paste(trt_vals, collapse = ", "), call. = FALSE)
+  }
+  if (length(trt_vals) < 2) {
+    stop("Column '", treatment, "' has fewer than 2 unique values. ",
+         "Cannot estimate counterfactuals without both arms.",
+         call. = FALSE)
+  }
+
+  # --- cut_points: form + range ---
+  if (!is.null(cut_points)) {
+    if (length(cut_points) == 1) {
+      if (!is.numeric(cut_points) || cut_points <= 0 ||
+          cut_points != as.integer(cut_points)) {
+        stop("cut_points scalar must be a positive integer (number of ",
+             "equi-spaced intervals). Got: ", cut_points,
+             call. = FALSE)
+      }
+    } else {
+      if (!is.numeric(cut_points)) {
+        stop("cut_points vector must be numeric.", call. = FALSE)
+      }
+      if (any(is.na(cut_points))) {
+        stop("cut_points contains NA values.", call. = FALSE)
+      }
+      max_t <- max(t_vals)
+      if (any(cut_points <= 0 | cut_points >= max_t)) {
+        stop("cut_points must lie strictly within (0, max(", time, ")). ",
+             "max(", time, ") = ", max_t, "; ",
+             "found: ", paste(cut_points, collapse = ", "),
+             call. = FALSE)
+      }
+      if (any(diff(cut_points) <= 0)) {
+        stop("cut_points must be strictly increasing.", call. = FALSE)
+      }
+    }
+  }
+
+  # --- covariate quality ---
+  if (length(covariates) > 0) {
+    check_covariate_quality(data, covariates)
+  }
+
+  invisible(TRUE)
+}

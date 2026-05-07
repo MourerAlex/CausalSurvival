@@ -21,6 +21,52 @@ Extension path when needed:
 No architectural lock-in from the current binary-only choice — the
 standardization site is the only place that needs to relax.
 
+## Optional pass-through of original `time` / `status` in `to_person_time()`
+
+v1 drops the user's original `time` and `status` columns from the
+person-time output (they're redundant with `k` + `y_flag` / `c_flag`
+once discretized). Output schema is `id, k, treatment, <covariates>,
+y_flag, c_flag`.
+
+**Useful add:** an optional `keep_subject_columns = TRUE` flag (or
+similar) that broadcasts the original `time` and `status` to every row.
+Lets users cross-check the discretization, diagnose binning artifacts,
+and (most importantly) **validate the DGP simulator's discretization**
+against known continuous truth when we build
+`simulate_causal_survival_data()`.
+
+Defer until the DGP work — that's when we'll actually want it.
+Implementation seam already in `to_person_time()` body (the explicit
+`pt_data[[time]] <- NULL` / `pt_data[[status]] <- NULL` block).
+
+## Single-arm / natural-course analysis
+
+`validate_subject_level()` and `validate_person_time()` currently hard-error
+when treatment has fewer than 2 unique values. This blocks legitimate
+single-arm use cases:
+
+- **Natural-course / observational cumulative incidence** — no contrast,
+  just the marginal CIF for a single cohort. Useful for descriptive
+  reporting or as a baseline against intervened-arm estimates from a
+  separate fit.
+- **Alternative marginalization / transportability** — standardize a
+  single arm to a target covariate distribution that differs from the
+  source population.
+
+Extension path:
+
+- Relax the `< 2 unique values` check to a warning, or gate behind an
+  explicit `single_arm = TRUE` flag.
+- `causal_survival()` returns per-arm CIF only (no contrast object).
+- IPW path: `ipw_static_trt` doesn't apply (no propensity contrast);
+  only g-formula and censoring weights remain meaningful. Or restrict
+  single-arm to `method = "g_formula"`.
+- Phase 3 design point: how does the orchestrator handle `length(arms)
+  == 1`? Probably a separate code path with stripped accessors
+  (`contrast()` would error / return NULL).
+
+Defer to v1.x once the binary-arm case is solid.
+
 ## Treatment label preservation for display
 
 Treatment is standardized to `{0, 1}` numerically (Option B) — clean

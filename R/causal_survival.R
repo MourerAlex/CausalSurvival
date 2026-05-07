@@ -281,8 +281,78 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
 
   list(
     estimates    = estimates,
-    models       = list(y = model_y, c = NULL, A = NULL, A_num = NULL),
+    models       = list(y = model_y, c = NULL, A = NULL,
+                        A_num = NULL, c_num = NULL),
     model_checks = fit$checks,
     weights      = NULL
   )
+}
+
+
+# ----------------------------------------------------------------------------
+# Internal worker: IPW path
+# ----------------------------------------------------------------------------
+
+#' IPW Cumulative Incidence Worker
+#'
+#' Inverse-probability-weighted estimator. Builds per-row IPT weights for
+#' the static point treatment, optional IPCW for right censoring, applies
+#' percentile truncation, fits a weighted Y-MSM, and marginalizes per arm.
+#'
+#' Joint stabilization (per `stabilize`):
+#'
+#' | `stabilize`  | propensity numerator | censoring numerator       |
+#' |--------------|----------------------|---------------------------|
+#' | `"marginal"` | `A ~ 1`              | `c_flag ~ A` (when ipcw)  |
+#' | NULL         | none (unstabilized)  | none (unstabilized)       |
+#'
+#' Censoring numerator is fixed to `c_flag ~ A` per H&R Technical Point
+#' 12.2; v1 doesn't expose a `c_num` formula slot.
+#'
+#' @keywords internal
+fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
+                    cut_times, formulas, ipcw, stabilize, truncate) {
+
+  do_stabilize <- identical(stabilize, "marginal")
+
+  # ---------- 1. Propensity model(s) on baseline ----------
+  prop_fit <- fit_propensity(
+    pt_data       = pt_data,
+    treatment     = treatment_col,
+    covariates    = covariates_vec,
+    stabilize     = do_stabilize,
+    formula_full  = formulas$A,
+    formula_num   = formulas$A_num
+  )
+  model_a     <- prop_fit$model_a
+  model_a_num <- prop_fit$model_a_num
+
+  # ---------- 2. Censoring model(s) for IPCW ----------
+  model_c     <- NULL
+  model_c_num <- NULL
+  check_c     <- NULL
+  check_c_num <- NULL
+  if (ipcw) {
+    haz_fit <- fit_hazard_models(
+      pt_data        = pt_data,
+      treatment      = treatment_col,
+      covariates     = covariates_vec,
+      active_methods = "ipw",
+      formulas       = formulas,
+      ipcw           = TRUE
+    )
+    model_c <- haz_fit$models$model_c
+    check_c <- haz_fit$checks$c
+
+    if (do_stabilize) {
+      cnum_fml <- stats::as.formula(
+        paste("c_flag ~", treatment_col)
+      )
+      cnum_fit <- fit_logistic(cnum_fml, pt_data, "C-hazard (numerator)")
+      model_c_num <- cnum_fit$model
+      check_c_num <- cnum_fit$check
+    }
+  }
+
+  stop("fit_ipw: WIP — weight construction not yet wired", call. = FALSE)
 }

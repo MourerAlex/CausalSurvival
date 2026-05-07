@@ -85,26 +85,49 @@ check_fitted_positivity <- function(model, model_label,
 #' fitter's collector grabs them, and builds a diagnostics list via
 #' [check_fitted_positivity()].
 #'
-#' Used by [fit_hazard_models()] (Y, C hazards on person-time) and by
-#' [fit_propensity()] (treatment model on baseline rows).
+#' Used by [fit_hazard_models()] (Y, C hazards on person-time), by
+#' [fit_propensity()] (treatment model on baseline rows), and by the IPW
+#' worker for the weighted Y-MSM fit.
 #'
 #' @param formula A fitted model formula.
 #' @param data Data frame passed to `glm()`.
 #' @param label Human-readable label for warnings and diagnostics.
+#' @param weights Optional numeric vector of `glm` case weights, length
+#'   `nrow(data)`. NULL (default) fits an unweighted glm. When supplied,
+#'   the vector is stashed on `data` under an internal column name
+#'   (`.fit_logistic_w_`) and passed to `glm()` by that name; this
+#'   side-steps NSE on the `weights` formal.
 #'
 #' @return A list with `model` (the glm object) and `check` (diagnostics).
 #' @keywords internal
-fit_logistic <- function(formula, data, label) {
+fit_logistic <- function(formula, data, label, weights = NULL) {
   glm_warnings <- character()
 
-  model <- withCallingHandlers(
-    stats::glm(formula, data = data,
-               family = stats::binomial(link = "logit")),
-    warning = function(w) {
-      glm_warnings <<- c(glm_warnings, conditionMessage(w))
-      invokeRestart("muffleWarning")
+  handler <- function(w) {
+    glm_warnings <<- c(glm_warnings, conditionMessage(w))
+    invokeRestart("muffleWarning")
+  }
+
+  if (is.null(weights)) {
+    model <- withCallingHandlers(
+      stats::glm(formula, data = data,
+                 family = stats::binomial(link = "logit")),
+      warning = handler
+    )
+  } else {
+    if (!is.numeric(weights) || length(weights) != nrow(data)) {
+      stop("`weights` must be a numeric vector of length nrow(data) (",
+           nrow(data), "); got length ", length(weights), ".",
+           call. = FALSE)
     }
-  )
+    data$.fit_logistic_w_ <- weights
+    model <- withCallingHandlers(
+      stats::glm(formula, data = data,
+                 family = stats::binomial(link = "logit"),
+                 weights = .fit_logistic_w_),
+      warning = handler
+    )
+  }
 
   # Re-emit glm warnings so they are collected by the calling fitter's handler
   for (w in glm_warnings) warning(w, call. = FALSE)

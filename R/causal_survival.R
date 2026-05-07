@@ -146,6 +146,32 @@ causal_survival <- function(pt_data,
       call. = FALSE
     )
   }
+
+  # --- Assemble S3 fit object ---
+  ci_list <- list(gformula = NULL, ipw = NULL)
+  ci_list[[method]] <- worker_out$estimates
+
+  fit <- list(
+    call                 = cl,
+    method               = method,
+    cumulative_incidence = ci_list,
+    weights              = worker_out$weights,
+    models               = worker_out$models,
+    model_checks         = worker_out$model_checks,
+    model_diagnostics    = NULL,
+    warnings             = collected_warnings,
+    pt_data              = if (keep_data) pt_data else NULL,
+    cut_times            = cut_times,
+    treatment_levels     = attr(pt_data, "treatment_levels"),
+    id_col               = id_col,
+    treatment_col        = treatment_col,
+    covariates           = covariates_vec,
+    stabilize            = stabilize,
+    ipcw                 = ipcw,
+    truncate             = truncate
+  )
+  class(fit) <- "causal_survival_fit"
+  fit
 }
 
 

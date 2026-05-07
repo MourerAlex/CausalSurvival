@@ -2,6 +2,31 @@
 
 Flagged extensions and known limitations. Not in current scope.
 
+## Resume — Phase 3, fit_ipw() mid-implementation
+
+**Branch**: `claude/general-session-1wHyZ` (force-pushed; pull with `--force` if a previous session is checked out).
+
+**Current state**:
+- `causal_survival(method = "gformula")` runs end-to-end and returns a complete `causal_survival_fit` S3 object.
+- `causal_survival(method = "ipw")` errors at `stop("fit_ipw: WIP — Y-MSM not yet wired")` in `R/causal_survival.R`. Propensity, optional IPCW C-hazard + numerator, raw weights (`w_a`, `w_a_raw`, `w_cens`, `w_cens_raw`), truncation, and `combined_w` are all wired. Y-MSM fit and per-arm marginalization are the remaining pieces.
+
+**Next two chunks** (proposed in chat history; await `ok`):
+- **5c**: weighted Y-MSM via `fit_logistic(..., weights = combined_w)`, then per-arm clone → `predict_counterfactual_hazard` → `cumprod_survival` → `tapply(..., mean)`. Default MSM is marginal in L (`y_flag ~ A + k + I(k^2) + I(k^3)`); user override via `formulas$y`. Builds the `estimates` data frame in the same shape as `fit_gformula` returns.
+- **5d**: return list — `estimates`, `models = list(y, c, A, A_num, c_num)`, `model_checks` (parallel keys), `weights = list(pt_data_weighted, weight_summary, flagged_ids, flagged_log, truncate)`. Closes the function for real (drops the WIP `stop()`).
+
+**Open questions parked**:
+- Symmetrize `models` list shape across `fit_gformula` and `fit_ipw`? (Currently `fit_gformula` has 4 slots, `fit_ipw` will have 5 — user said "I don't know" when asked.)
+- Switch the IPW weighted glm to `quasibinomial` to silence "non-integer #successes"? Audit pending — see "Weighted GLM family" section below.
+
+**After fit_ipw closes** (rough order, all per-spec):
+1. Accessors — `risk()`, `contrast()`, `summary()`, `print()`, `plot()` (Okabe-Ito palette).
+2. `bootstrap(fit)` returning a standalone `causal_survival_bootstrap` object.
+3. `reweight()` helper using preserved `*_raw` weight columns.
+4. Tests per the "Tests (per file, planned)" checklist below.
+5. Build/release checklist (roxygen, `R CMD check`, bundled dataset, `simulate_causal_survival_data()`, vignette).
+
+**Workflow rule in force this session** — Eyeball-10-30 review (chunk-by-chunk approval, no silent edits, commit at file boundaries). Persist this in CLAUDE.md if you want it carried forward across sessions.
+
 ## Multi-arm treatment
 
 Currently `A` is binary, standardized to `{0, 1}` in `to_person_time` (hard

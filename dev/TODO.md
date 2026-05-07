@@ -169,6 +169,30 @@ Okabe-Ito subset (vs CCR's 4-arm palette):
 
 CI ribbons use the corresponding fill at low alpha.
 
+### Weighted GLM family: `binomial` vs `quasibinomial`
+
+`fit_logistic()` uses `family = binomial("logit")` for both unweighted
+and weighted fits. With non-integer IPW weights, `binomial` fires the
+"non-integer #successes in a binomial glm!" warning per fit. Point
+estimates from `quasibinomial("logit")` are identical; only the
+dispersion parameter and naive SE/inference machinery differ — and we
+don't use parametric inference (CIs come from the bootstrap).
+
+**Decision deferred.** Before settling, audit how peer packages handle
+this:
+
+- `gfoRmula` / `gfoRmulaICE` — what family do they use for weighted
+  pooled-logistic MSM fits?
+- `ipw` / `ipwErrorY` — same question for the outcome model.
+- `survey::svyglm` — uses `quasibinomial` by design for weighted
+  regression; is that the convention we want to adopt?
+- Robins/Hernán code (e.g. `causaldata`-shipped scripts) — likely
+  `binomial` with the warning silenced, but worth confirming.
+
+If the field convention is `quasibinomial` for weighted fits, switch
+the IPW path only (keep `binomial` for unweighted Y/C-hazard and
+propensity fits to avoid changing existing behavior).
+
 ---
 
 ## Build / release checklist (v1)

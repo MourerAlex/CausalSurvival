@@ -60,7 +60,7 @@ Extension path:
 - `causal_survival()` returns per-arm CIF only (no contrast object).
 - IPW path: `ipw_static_trt` doesn't apply (no propensity contrast);
   only g-formula and censoring weights remain meaningful. Or restrict
-  single-arm to `method = "g_formula"`.
+  single-arm to `method = "gformula"`.
 - Phase 3 design point: how does the orchestrator handle `length(arms)
   == 1`? Probably a separate code path with stripped accessors
   (`contrast()` would error / return NULL).
@@ -123,8 +123,10 @@ construction logic lives.
 Inherit CCR's shape (see `../../separable_effects/dev/TODO.md`):
 
 - `fit$cumulative_incidence` as a named list per method run:
-  `$g_formula` (NULL if not run), `$ipw` (NULL if not run). Plot / print /
-  summary iterate over list entries.
+  `$gformula` (NULL if not run), `$ipw` (NULL if not run). Plot / print /
+  summary iterate over list entries. Slot keys match the user-facing
+  `method` arg values (no underscore variant) so the same string
+  identifies a method end-to-end.
 - `fit$weights` (IPW runs only): `pt_data_weighted` with raw + truncated
   weight columns preserved, `weight_summary`, `truncated_ids`,
   `extreme_weight_adjust`, `extreme_weight_threshold`. Enables

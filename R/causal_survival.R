@@ -102,8 +102,50 @@ causal_survival <- function(pt_data,
   treatment_col  <- attr(pt_data, "treatment_col")
   covariates_vec <- attr(pt_data, "covariates")
 
-  # [worker dispatch — next chunk]
-  stop("worker not yet wired", call. = FALSE)
+  if (verbose) message("causal_survival(): fitting method = '", method, "'")
+
+  # --- Worker dispatch with warning collection ---
+  # Inner fitters re-emit glm warnings via warning(); the outer handler
+  # captures them into `collected_warnings`, muffles propagation, and a
+  # single grouped notice is fired at the end so the caller knows to
+  # inspect fit$warnings.
+  collected_warnings <- character()
+
+  worker_out <- withCallingHandlers(
+    switch(method,
+      gformula = fit_gformula(
+        pt_data        = pt_data,
+        id_col         = id_col,
+        treatment_col  = treatment_col,
+        covariates_vec = covariates_vec,
+        cut_times      = cut_times,
+        formulas       = formulas
+      ),
+      ipw = fit_ipw(
+        pt_data        = pt_data,
+        id_col         = id_col,
+        treatment_col  = treatment_col,
+        covariates_vec = covariates_vec,
+        cut_times      = cut_times,
+        formulas       = formulas,
+        ipcw           = ipcw,
+        stabilize      = stabilize,
+        truncate       = truncate
+      )
+    ),
+    warning = function(w) {
+      collected_warnings <<- c(collected_warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  if (length(collected_warnings) > 0L) {
+    warning(
+      "causal_survival(): ", length(collected_warnings),
+      " warning(s) collected during fit. See fit$warnings for details.",
+      call. = FALSE
+    )
+  }
 }
 
 

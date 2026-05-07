@@ -71,3 +71,101 @@ The internal IPW helpers (`ipw_static_trt`, `ipw_cens`) keep the
 flexible `model_num` argument so the v1.1 extension lands without
 helper rewrites. `causal_survival()` is the place where the joint
 construction logic lives.
+
+### Fit object structure (Phase 3)
+
+Inherit CCR's shape (see `../../separable_effects/dev/TODO.md`):
+
+- `fit$cumulative_incidence` as a named list per method run:
+  `$g_formula` (NULL if not run), `$ipw` (NULL if not run). Plot / print /
+  summary iterate over list entries.
+- `fit$weights` (IPW runs only): `pt_data_weighted` with raw + truncated
+  weight columns preserved, `weight_summary`, `truncated_ids`,
+  `extreme_weight_adjust`, `extreme_weight_threshold`. Enables
+  `reweight()` without refitting.
+- `fit$warnings`: collected via `withCallingHandlers()` wrapper around the
+  `causal_survival()` body, muffled during run, re-emitted as a single
+  group at end. `print(fit)` shows count.
+- `fit$model_diagnostics` (planned): post-fit GLM checks consolidated.
+- No `fit$contrasts` slot — contrasts computed on demand via
+  `contrast(fit, ci = bootstrap(fit))`.
+
+### Bootstrap as standalone object
+
+Same as CCR — `bootstrap(fit)` returns a `causal_survival_bootstrap` (or
+similar) object, NOT attached to `fit`. Keeps `fit` pure, makes optional
+re-runs explicit. `plot(fit, ci = boot)`, `contrast(fit, ci = boot)`.
+
+### `reweight()` helper
+
+`reweight(fit, extreme_weight_adjust, extreme_weight_threshold)` re-applies
+truncation to the preserved raw weights and re-runs the IPW estimator. Fast
+sensitivity analysis without refitting. Same plumbing as CCR.
+
+### Post-fit GLM checks (beyond positivity)
+
+`check_fitted_positivity` ported. Still missing — bundle into a single
+`check_fitted_quality()` returning a structured diagnostics list:
+
+- Collinearity: glm dropped a term → `NA` coefficient
+- Convergence: `!model$converged`
+- Separation: extreme standard errors
+
+Surface as `fit$model_diagnostics`.
+
+### Plot color palette
+
+Okabe-Ito subset (vs CCR's 4-arm palette):
+
+- A=1 line: `#D55E00` (vermillion)
+- A=0 line: `#0072B2` (blue)
+- Per-method overlays use linetype, not color
+
+CI ribbons use the corresponding fill at low alpha.
+
+---
+
+## Build / release checklist (v1)
+
+- [ ] `roxygen2::roxygenise()` populates `man/` and `NAMESPACE`
+- [ ] `R CMD check` clean (no NOTEs, WARNINGs, ERRORs)
+- [ ] Bundled survival example dataset (`data/<name>.rda`) — likely a subset
+      of `survival::veteran` or similar, with documentation in `R/data.R`
+- [ ] Internal `simulate_causal_survival_data()` helper for unit tests
+      (known true effects, edge cases). Not exported.
+- [ ] Vignette: walkthrough on the bundled dataset, both methods, with /
+      without bootstrap
+- [ ] README.md with install + minimal example
+- [ ] NEWS.md
+- [ ] LICENSE.md
+- [ ] `pkgdown` site (optional for v1)
+- [ ] CRAN / r-universe submission post-stabilization
+
+## Tests (per file, planned)
+
+- [ ] `test-utils.R` — `%||%`
+- [ ] `test-validate.R` — input shape, person-time validator (left-trunc,
+      treatment {0,1}, NA hard errors, type hard errors)
+- [ ] `test-hazards.R` — `fit_logistic`, `predict_counterfactual_hazard`,
+      `cumprod_survival`, `check_fitted_positivity`
+- [ ] `test-weights.R` — `ipw`, `ipw_static_trt`, `ipw_cens`, truncation,
+      `summarize_weights`
+- [ ] `test-propensity.R` — `fit_propensity`
+- [ ] `test-to_person_time.R` (Phase 2) — long-format builder, treatment
+      standardization to {0,1}, `treatment_levels` attribute
+- [ ] `test-causal_survival.R` (Phase 3) — orchestrator, both methods,
+      joint stabilization switch
+- [ ] `test-accessors.R` (Phase 3) — `risk()`, `contrast()`, `summary()`,
+      `print()`, `plot()` smoke tests
+- [ ] `test-bootstrap.R` (Phase 3) — resampling, percentile CI
+
+## Lineage note
+
+CCR's `dev/TODO.md` §"Future: shared causal_tools" anticipated factoring
+out exactly the functions ported into this package (`to_person_time`,
+`validate_*`, pooled-logistic hazard fitting + positivity check, `%||%`,
+`weighted_hazard_by_k`-style estimators, cumulative-incidence shape).
+CausalSurvival is functionally that shared package for the survival-only
+(no D event) case. If a third causal package ever needs the same building
+blocks, the CCR-side note becomes the relevant design doc — factor out
+properly into a low-level `causal_tools` package at that point.

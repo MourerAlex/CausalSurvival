@@ -4,9 +4,12 @@ Live artifact tracking the dependency-ordered port of 17 functions from
 CausalCompetingRisks (CCR) to CausalSurvival, per spec §12.3
 (`../../separable_effects/dev/CAUSAL_SURVIVAL_SPEC.md`).
 
-Updated as functions are ported. Status: **Phase 1 port complete** — all
-port-set functions either ported or deferred (snap_time, weighted_hazard_by_k).
-Next: Phase 2 (trap-fresh-writes) and Phase 3 (public API).
+Updated as functions are ported. Status: **Phase 1 + Phase 2 complete**
+— all port-set functions either ported or deferred (snap_time,
+weighted_hazard_by_k, cum_inc_from_weighted); Phase 2 trap-fresh-writes
+landed (`to_person_time`, `validate_subject_level`, `standardize_treatment`,
+`fit_hazard_models`). Next: Phase 3 (public API: `causal_survival()`,
+accessors, bootstrap).
 
 ---
 
@@ -46,6 +49,7 @@ CLEAN-MOVE classification:
 | `cumprod_survival` | hazards.R | **ported** (R/hazards.R) | doc tightened: time-order precondition |
 | `predict_with_warning` | gformula_core.R → **hazards.R** | **ported** (R/hazards.R) | moved file (logical home is hazards.R) |
 | `weighted_hazard_by_k` | ipw_core.R | **deferred** | non-parametric Hajek estimator; v1 IPW path is parametric MSM (`fit_logistic` + `predict_counterfactual_hazard`), so no v1 caller. Re-port if v1.x adds a non-parametric (weighted-KM-style) IPW method |
+| `cum_inc_from_weighted` | ipw_core.R | **deferred** | thin wrapper over `weighted_hazard_by_k`; v1 parametric-MSM path reuses `predict_counterfactual_hazard` + `cumprod_survival` (no D factor needed for single-event), so no v1 caller. Re-port paired with `weighted_hazard_by_k` if v1.x adds non-parametric Hajek IPW |
 | `check_covariate_quality` | validate.R | **ported** (R/validate.R) | NA + unsupported-type promoted to hard errors (was warnings in CCR) |
 | `validate_input_shape` | validate.R | **ported** (R/validate.R) | |
 | `check_fitted_positivity` | hazards.R | **ported** (R/hazards.R) | |

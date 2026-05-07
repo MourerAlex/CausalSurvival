@@ -165,6 +165,83 @@ predict_counterfactual_hazard <- function(model, data, treatment_var,
 }
 
 
+#' Fit Hazard Models
+#'
+#' Fits pooled logistic regression models for the Y-hazard and (optionally)
+#' censoring hazard on person-time data. Per-model diagnostics are collected
+#' via [check_fitted_positivity()].
+#'
+#' @param pt_data Data frame in person-time format.
+#' @param treatment Character. Treatment column name. Used directly in both
+#'   Y- and C-hazard formulas (no working-copy column).
+#' @param covariates Character vector. Covariate column names.
+#' @param active_methods Character vector. Subset of
+#'   `c("g_formula", "ipw")`. Determines which models get fit:
+#'   - `"g_formula"`: model_y only
+#'   - `"ipw"`:       model_c (only when `ipcw = TRUE`)
+#' @param formulas Named list or NULL. User-specified formulas (names `y`,
+#'   `c`). Any entry absent falls back to the default.
+#' @param ipcw Logical. When FALSE, the censoring model is not fit and
+#'   `model_c` stays NULL.
+#'
+#' @return A list with two entries:
+#'   \describe{
+#'     \item{models}{Named list: `model_y`, `model_c` (glm objects or NULL).}
+#'     \item{checks}{Named list: `y`, `c` (per-model diagnostics or NULL).}
+#'   }
+#'
+#' @details
+#' Default formula: `flag ~ treatment + k + I(k^2) + I(k^3) + covariates`
+#' (additive, no interactions).
+#'
+#' The Y-hazard model fit here is **unweighted**. The IPW path's weighted
+#' Y-MSM fit is performed downstream in the orchestrator after weights
+#' have been assembled.
+#'
+#' @keywords internal
+fit_hazard_models <- function(pt_data,
+                              treatment,
+                              covariates,
+                              active_methods,
+                              formulas,
+                              ipcw = TRUE) {
+
+  cov_terms <- if (length(covariates) > 0) {
+    paste(covariates, collapse = " + ")
+  } else {
+    NULL
+  }
+  time_terms <- "k + I(k^2) + I(k^3)"
+
+  models <- list(model_y = NULL, model_c = NULL)
+  checks <- list(y = NULL, c = NULL)
+
+  # --- Y-hazard model (g-formula path; IPW-MSM Y fit is weighted, done later) ---
+  if ("g_formula" %in% active_methods) {
+    fml_y <- formulas$y %||% stats::as.formula(
+      paste("y_flag ~", paste(c(treatment, time_terms, cov_terms),
+                              collapse = " + "))
+    )
+    fit_result <- fit_logistic(fml_y, pt_data, "Y-hazard")
+    models$model_y <- fit_result$model
+    checks$y <- fit_result$check
+  }
+
+  # --- Censoring model (IPW path with ipcw) ---
+  if ("ipw" %in% active_methods && ipcw) {
+    fml_c <- formulas$c %||% stats::as.formula(
+      paste("c_flag ~", paste(c(treatment, time_terms, cov_terms),
+                              collapse = " + "))
+    )
+    fit_result <- fit_logistic(fml_c, pt_data, "C-hazard")
+    models$model_c <- fit_result$model
+    checks$c <- fit_result$check
+  }
+
+  list(models = models, checks = checks)
+}
+
+
 #' Per-Subject Cumulative Product of Survival Probability
 #'
 #' Computes prod_{j <= s}(1 - haz_j) within each subject id. Returned vector

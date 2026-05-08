@@ -2,30 +2,39 @@
 
 Flagged extensions and known limitations. Not in current scope.
 
-## Resume — Phase 3, fit_ipw() mid-implementation
+## Resume — Phase 3 worker layer complete; accessors next
 
-**Branch**: `claude/general-session-1wHyZ` (force-pushed; pull with `--force` if a previous session is checked out).
+**Branch**: `claude/general-session-1wHyZ` (force-pushed during this session — pull with `--force` if a previous checkout exists). Last commit: `4511a98 feat: fit_ipw() — return list, closes the IPW worker`.
 
 **Current state**:
-- `causal_survival(method = "gformula")` runs end-to-end and returns a complete `causal_survival_fit` S3 object.
-- `causal_survival(method = "ipw")` errors at `stop("fit_ipw: WIP — Y-MSM not yet wired")` in `R/causal_survival.R`. Propensity, optional IPCW C-hazard + numerator, raw weights (`w_a`, `w_a_raw`, `w_cens`, `w_cens_raw`), truncation, and `combined_w` are all wired. Y-MSM fit and per-arm marginalization are the remaining pieces.
+- `causal_survival(method = "gformula")` and `causal_survival(method = "ipw")` both run end-to-end and return a `causal_survival_fit` S3 object.
+- IPW path: propensity (+ optional `A ~ 1` numerator), optional IPCW C-hazard (+ optional `c_flag ~ A` numerator), `ipw_static_trt` and `ipw_cens` weights, `apply_weight_truncation` (preserves `*_raw` columns for the future `reweight()` seam), weighted Y-MSM (`y_flag ~ A + k + I(k^2) + I(k^3)` by default; user can override via `formulas$y` for a covariate-conditional MSM), per-arm clone → `predict_counterfactual_hazard` → `cumprod_survival` → marginalize.
+- Joint stabilization is the single `stabilize` switch (`"marginal"` or `NULL`); both numerators move together.
+- Nothing was sanity-checked against R — no R interpreter in the sandbox where this was written. **First action next session: run the package on a tiny synthetic dataset for both methods.**
 
-**Next two chunks** (proposed in chat history; await `ok`):
-- **5c**: weighted Y-MSM via `fit_logistic(..., weights = combined_w)`, then per-arm clone → `predict_counterfactual_hazard` → `cumprod_survival` → `tapply(..., mean)`. Default MSM is marginal in L (`y_flag ~ A + k + I(k^2) + I(k^3)`); user override via `formulas$y`. Builds the `estimates` data frame in the same shape as `fit_gformula` returns.
-- **5d**: return list — `estimates`, `models = list(y, c, A, A_num, c_num)`, `model_checks` (parallel keys), `weights = list(pt_data_weighted, weight_summary, flagged_ids, flagged_log, truncate)`. Closes the function for real (drops the WIP `stop()`).
-
-**Open questions parked**:
-- Symmetrize `models` list shape across `fit_gformula` and `fit_ipw`? (Currently `fit_gformula` has 4 slots, `fit_ipw` will have 5 — user said "I don't know" when asked.)
-- Switch the IPW weighted glm to `quasibinomial` to silence "non-integer #successes"? Audit pending — see "Weighted GLM family" section below.
-
-**After fit_ipw closes** (rough order, all per-spec):
-1. Accessors — `risk()`, `contrast()`, `summary()`, `print()`, `plot()` (Okabe-Ito palette).
-2. `bootstrap(fit)` returning a standalone `causal_survival_bootstrap` object.
-3. `reweight()` helper using preserved `*_raw` weight columns.
+**Next priorities** (from the Phase 3 design points + checklists below):
+1. Accessors: `risk()`, `contrast()`, `summary()`, `print()`, `plot()` (Okabe-Ito palette).
+2. `bootstrap(fit)` returning a standalone `causal_survival_bootstrap` object (NOT attached to `fit`).
+3. `reweight(fit, truncate = ...)` helper using preserved `*_raw` weight columns.
 4. Tests per the "Tests (per file, planned)" checklist below.
-5. Build/release checklist (roxygen, `R CMD check`, bundled dataset, `simulate_causal_survival_data()`, vignette).
+5. Build/release: roxygen, `R CMD check`, bundled dataset, `simulate_causal_survival_data()`, vignette.
 
-**Workflow rule in force this session** — Eyeball-10-30 review (chunk-by-chunk approval, no silent edits, commit at file boundaries). Persist this in CLAUDE.md if you want it carried forward across sessions.
+**Open questions still parked**:
+- Symmetrize `models` list shape across workers? `fit_gformula` returns 4 slots (`y, c, A, A_num`), `fit_ipw` returns 5 (adds `c_num`). User said "I don't know" — left asymmetric.
+- Switch IPW weighted glm to `quasibinomial` to silence "non-integer #successes"? Audit pending — see "Weighted GLM family" section below.
+- `apply_weight_truncation()` internally returns `flagged_ids` and `flagged_log`; the orchestrator only surfaces `truncated_ids` (= `flagged_ids`). The per-row `flagged_log` detail is dropped — re-add if a diagnostics accessor needs it.
+
+**Workflow rule from this session — Eyeball-10-30 review**:
+1. Show ~10–30 lines at a time in chat as a fenced code block before writing to disk. One logical unit per chunk.
+2. Wait for explicit approval (`ok`, `yes`, `go`, `agree`) before calling Write/Edit. No silent file edits.
+3. Flag design choices baked into the chunk in 2–4 bullets after the code.
+4. Commit at file boundaries, not at every chunk.
+5. No drive-by changes outside the chunk being shown.
+6. Split chunks longer than ~30 lines.
+7. After approval of chunk N, immediately propose chunk N+1.
+8. Preserve user-supplied snippets verbatim if they ask to "keep this somewhere".
+
+Persist this in `CLAUDE.md` to carry it across future sessions automatically.
 
 ## Multi-arm treatment
 

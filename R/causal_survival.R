@@ -433,5 +433,27 @@ fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
     inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
   )
 
-  stop("fit_ipw: WIP — return list not yet wired", call. = FALSE)
+  list(
+    estimates    = estimates,
+    models       = list(
+      y     = model_y,
+      c     = model_c,
+      A     = model_a,
+      A_num = model_a_num,
+      c_num = model_c_num
+    ),
+    model_checks = list(
+      y     = check_y,
+      c     = check_c,
+      A     = prop_fit$check_a,
+      A_num = prop_fit$check_a_num,
+      c_num = check_c_num
+    ),
+    weights = list(
+      pt_data_weighted = pt_data,
+      weight_summary   = summarize_weights(pt_data),
+      truncated_ids    = trunc_out$flagged_ids,
+      truncate         = truncate
+    )
+  )
 }

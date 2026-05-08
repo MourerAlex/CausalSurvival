@@ -388,5 +388,50 @@ fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
   # ---------- 5. Combined per-row weight for the Y-MSM ----------
   combined_w <- if (ipcw) pt_data$w_a * pt_data$w_cens else pt_data$w_a
 
-  stop("fit_ipw: WIP — Y-MSM not yet wired", call. = FALSE)
+  # ---------- 6. Weighted Y-MSM fit ----------
+  # Default Y-MSM is marginal in covariates: weights handle confounding,
+  # so no covariate adjustment in the outcome model. Users can supply
+  # `formulas$y` for a covariate-conditional MSM (e.g. for subgroup
+  # estimands in v1.1).
+  time_terms <- "k + I(k^2) + I(k^3)"
+  fml_y <- formulas$y %||% stats::as.formula(
+    paste("y_flag ~", paste(c(treatment_col, time_terms), collapse = " + "))
+  )
+  msm_fit <- fit_logistic(
+    formula = fml_y,
+    data    = pt_data,
+    label   = "Y-MSM (IPW)",
+    weights = combined_w
+  )
+  model_y <- msm_fit$model
+  check_y <- msm_fit$check
+
+  # ---------- 7. Per-arm CIF: clone -> predict -> cumprod -> mean ----------
+  baseline <- pt_data[pt_data$k == 0, , drop = FALSE]
+  cif_by_arm <- lapply(c(0, 1), function(a) {
+    clone <- make_clone(baseline, cut_times, treatment_col, a)
+    haz   <- predict_counterfactual_hazard(
+      model_y, clone, treatment_col, a,
+      paste0("Y-MSM a=", a)
+    )
+    if (any(is.na(haz))) {
+      warning(
+        "IPW: Y-MSM predictions contain ", sum(is.na(haz)),
+        " NA value(s). CIF estimates will be biased.",
+        call. = FALSE
+      )
+    }
+    S_i <- cumprod_survival(haz, clone[[id_col]])
+    S_k <- as.numeric(tapply(S_i, clone$k, mean))
+    1 - S_k
+  })
+
+  estimates <- data.frame(
+    treatment = rep(c(0, 1), each = length(cut_times)),
+    k         = rep(cut_times, times = 2),
+    surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
+    inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
+  )
+
+  stop("fit_ipw: WIP — return list not yet wired", call. = FALSE)
 }

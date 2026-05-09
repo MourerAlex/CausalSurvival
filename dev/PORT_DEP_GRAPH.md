@@ -36,9 +36,9 @@ canonical spec now lives in `~/Bureau/cowork/separable_effects/dev/CAUSAL_SURVIV
 
 - Column schema changes: `y_flag` / `c_flag` → `y_event` / `dep_cens` / `indep_cens`.
 - Structural ordering C_admin → C_dep → Y; admin censoring placed first within each interval.
-- `k` becomes integer interval index `1..K_end` (was: left-edge interval time).
-- One catchup interval `K_end = K_max + 1` materialized; all subjects who reached `T_max` at risk get `indep_cens = 1` at K_end.
-- `cens_type` arg (scalar or per-subject vector, "dependent"/"independent"); `T_max` arg with default `max(time)`.
+- `k` becomes integer interval index `1..K_max` (was: left-edge interval time).
+- Subjects who reach `T_max` at risk are administratively censored by convention — no exit row materialized; their final at-risk row sits at `k = K_max` with all flags `0`.
+- `ipcw` arg (scalar logical or per-subject logical vector; TRUE = dependent censoring [contributes to c-hazard fit + gets weighted], FALSE = independent [weight 1, treated as cause-specific competitor]); `T_max` arg with default `max(time)`. Per-subject vector is the user's a-priori labeling of each subject's censoring mechanism, never inferred from data.
 - C_admin wins ties at `T_max` (events at `time >= T_max` silently dropped).
 - Hard error if `T_max > max(time)`; warning if `mean(admin_reach) < 0.5`.
 - Cliff structurally impossible: `indep_cens = 1` rows never enter the c-hazard fit (model fits on `indep_cens = 0` rows only).
@@ -46,40 +46,40 @@ canonical spec now lives in `~/Bureau/cowork/separable_effects/dev/CAUSAL_SURVIV
 ### Phase 3 refactor inventory (per-file changes)
 
 **`R/data_prep.R`**
-- `to_person_time()`: full rewrite per spec §3.0.5. New args: `cens_type`, `T_max`, `event_cols`. Output columns `y_event` / `dep_cens` / `indep_cens`. K_end materialization. Diagnostic message for events at `t = 0`.
-- `validate_subject_level()`: new checks for `cens_type` shape (scalar or length-`n` vector, values in `{"dependent","independent"}`); `status ∈ {0, 1}`; `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning).
-- `validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant; `k ∈ {1, ..., K_end}`; K_end rows must all carry `indep_cens = 1`.
+- `to_person_time()`: full rewrite per spec §3.0.5. New args: `ipcw`, `T_max`. Output columns `y_event` / `dep_cens` / `indep_cens`. Admin-truncation handled by dropping events/censoring at `time >= T_max` (no exit row). Intervals follow `(a, b]` convention (matches survSplit native). Hard error on events at `time = 0` (no home interval under `(0, t_1]`).
+- `validate_subject_level()`: new checks for `ipcw` shape (scalar logical or length-`n` logical vector); `status ∈ {0, 1}`; `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning).
+- `validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant (at most one indicator per row); `k ∈ {1, ..., K_max}`.
 
 **`R/hazards.R`**
 - `fit_hazard_models()`: c-hazard becomes `glm(dep_cens ~ ...)` on rows with `indep_cens = 0`; y-hazard becomes `glm(y_event ~ ...)` on rows with `indep_cens = 0` AND `dep_cens = 0`. Polynomial-in-`k` interpretation shifts from time-value to integer index; formula form unchanged.
 
 **`R/weights.R`**
-- `ipw_cens()`: column references `c_flag` → `dep_cens`. Rows at K_end auto-excluded (no c-hazard prediction there). No cliff guard needed — replaced by structural exclusion.
+- `ipw_cens()`: column references `c_flag` → `dep_cens`. No cliff guard needed — replaced by structural exclusion (admin-truncated subjects have no exit row at `T_max`; `indep_cens = 1` rows excluded from c-hazard fit).
 - `ipw()`, `ipw_static_trt()`: column renames only; logic stable.
 
 **`R/causal_survival.R` workers (gformula, ipw)**
-- `make_clone()`: clone `k` values become integer `1..K_max` (K_end excluded; predictions only reported up to T_max).
+- `make_clone()`: clone `k` values become integer `1..K_max` (predictions only reported up to T_max).
 - G-formula worker: predicts `y_event` hazard on the clone for `k = 1..K_max`. Cumprod survival over those K_max steps.
 - IPW worker: weighted Y-MSM glm fits on rows with `indep_cens = 0` AND `dep_cens = 0` only. Combined weight `w_a * w_cens` as before.
 - Baseline-covariate extraction: `pt_data[pt_data$k == 0, ]` → either `pt_data[pt_data$k == 1, ]` or pass the original subject-level data alongside.
 
 **`R/contrast.R` + S3 methods**
-- Reporting time grid: `cut_times[1..K_max]`, K_end excluded.
+- Reporting time grid: `cut_times[1..K_max]`.
 - `summary(time=)` and `contrast(time=)` validators reject `time > T_max` (was: silent extrapolation).
 
 **`R/utils.R` / `R/print.person_time.R`**
-- `print.person_time()` header: display `K_max`, `K_end`, `T_max` attributes.
+- `print.person_time()` header: display `K_max`, `T_max` attributes.
 - Helpers filtering on `c_flag` → `dep_cens`.
 
 **Tests** (`tests/testthat/`)
 - All references to `y_flag` / `c_flag` columns → renamed.
-- Tests hard-coding `k = c(0, 2, 4, ...)` → updated to integer `k = 1..K_end`.
+- Tests hard-coding `k = c(0, 2, 4, ...)` → updated to integer `k = 1..K_max`.
 - New tests:
-  - `cens_type` accepted as scalar and as length-n vector.
+  - `ipcw` accepted as scalar logical and as length-n logical vector.
   - Hard error on `T_max > max(time)`.
   - Warning on `mean(admin_reach) < 0.5`.
-  - K_end materialization + `indep_cens = 1` invariant.
-  - C_admin wins ties at T_max (`status=1, time=T_max` → `indep_cens=1` at K_end, no `y_event=1` row).
+  - Admin truncation: subjects with `time >= T_max` produce no exit row; final at-risk row sits at `k = K_max`.
+  - C_admin wins ties at T_max (`status=1, time=T_max` → no `y_event=1` row).
   - Cliff regression test: smoke run from commit `084fe98` should now complete with finite weights.
 
 **`dev/smoke_run.R`** — DGP updated; verify `summarize_weights()` no longer reports max ~1e11.
@@ -92,10 +92,10 @@ canonical spec now lives in `~/Bureau/cowork/separable_effects/dev/CAUSAL_SURVIV
 
 Each chunk is reviewable in isolation; functional state restored only after the whole run.
 
-1. `to_person_time()` signature + roxygen (chunk 1, drafted in 2026-05-08 session).
-2. `to_person_time()` inferred-mode body.
-3. `to_person_time()` pre-split mode body + `event_cols` validator.
-4. `validate_person_time()` updates.
+1. ~~`to_person_time()` signature + roxygen~~ — **done 2026-05-09** (see TODO.md resume).
+2. ~~`to_person_time()` body~~ — **done 2026-05-09** (see TODO.md resume).
+3. `validate_subject_level()` — extend for `ipcw` shape + T_max range; replace inline placeholder in `to_person_time()`.
+4. `validate_person_time()` updates — column set + mutual-exclusivity invariant + integer `k`.
 5. `fit_hazard_models()` — c-hazard / y-hazard fit population changes.
 6. `fit_ipw()` cliff-guard removal + column references; `dev/smoke_run.R` re-run.
 7. Workers (`make_clone`, `fit_gformula`, `fit_ipw`) — `k`-as-integer, baseline extraction.

@@ -2,29 +2,36 @@
 
 Flagged extensions and known limitations. Not in current scope.
 
-## Resume — Phase 3 worker layer complete; accessors next
+## Resume — Phase 3 data-convention overhaul: `to_person_time()` body done; validators next
 
-**Branch**: `claude/general-session-1wHyZ` (force-pushed during this session — pull with `--force` if a previous checkout exists). Last commit: `4511a98 feat: fit_ipw() — return list, closes the IPW worker`.
+**Branch**: `claude/gifted-wescoff` (worktree). Last commit at session start: `70bce71 docs: Phase 3 BLOCKED — record data-convention overhaul + cliff smoke run`.
 
-**Current state**:
-- `causal_survival(method = "gformula")` and `causal_survival(method = "ipw")` both run end-to-end and return a `causal_survival_fit` S3 object.
-- IPW path: propensity (+ optional `A ~ 1` numerator), optional IPCW C-hazard (+ optional `c_flag ~ A` numerator), `ipw_static_trt` and `ipw_cens` weights, `apply_weight_truncation` (preserves `*_raw` columns for the future `reweight()` seam), weighted Y-MSM (`y_flag ~ A + k + I(k^2) + I(k^3)` by default; user can override via `formulas$y` for a covariate-conditional MSM), per-arm clone → `predict_counterfactual_hazard` → `cumprod_survival` → marginalize.
-- Joint stabilization is the single `stabilize` switch (`"marginal"` or `NULL`); both numerators move together.
-- Nothing was sanity-checked against R — no R interpreter in the sandbox where this was written. **First action next session: run the package on a tiny synthetic dataset for both methods.**
+**What landed this session (`R/data_prep.R` only)**:
+- `to_person_time()` full rewrite per spec §3.0.5:
+  - New args: `ipcw` (logical scalar or per-subject vector; replaces `cens_type`), `T_max` (default `max(time)`).
+  - Output columns: `y_event` / `dep_cens` / `indep_cens` (was `y_flag` / `c_flag`).
+  - Integer `k = 1..K_max` (was time-value, 0-based). No `K_end` materialization.
+  - Inline `ipcw` + `T_max` validation (placeholder until `validate_subject_level()` is extended).
+- Interval convention switched from `[a, b)` to **`(a, b]`** (left-open right-closed). Aligns with survSplit native, ABGK / Andersen-Ravn / gfoRmula / ipw / mstate / pammtools. Adversarial check via 3 parallel agents (local resources + papers + packages) refuted the earlier claim that `[a, b)` was the literature standard.
+- Boundary handling at `T_max` under `(a, b]`:
+  - `time = T_max` is **inside** the last interval → events fire normally at `k = K_max`, censoring encodes normally.
+  - `time > T_max` → admin-censored (no exit row). No subject is ever dropped.
+- `time = 0` events: hard error (`(0, t_1]` excludes 0). Lists affected subject id(s).
 
-**Next priorities** (from the Phase 3 design points + checklists below):
-1. Accessors: `risk()`, `contrast()`, `summary()`, `print()`, `plot()` (Okabe-Ito palette).
-2. `bootstrap(fit)` returning a standalone `causal_survival_bootstrap` object (NOT attached to `fit`).
-3. `reweight(fit, truncate = ...)` helper using preserved `*_raw` weight columns.
-4. Tests per the "Tests (per file, planned)" checklist below.
-5. Build/release: roxygen, `R CMD check`, bundled dataset, `simulate_causal_survival_data()`, vignette.
+**Next session — refactor execution order**:
+1. **`validate_subject_level()`** — extend for `ipcw` shape (scalar logical or length-`n` logical vector); `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning). Replaces the inline placeholder block in `to_person_time()`.
+2. **`validate_person_time()`** — column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant (at most one indicator per row); `k ∈ {1, ..., K_max}`.
+3. **`fit_hazard_models()`** — c-hazard becomes `glm(dep_cens ~ ...)` on rows with `indep_cens = 0`; y-hazard becomes `glm(y_event ~ ...)` on rows with `indep_cens = 0` AND `dep_cens = 0`. Polynomial-in-`k` interpretation shifts from time-value to integer index; formula form unchanged.
+4. **`fit_ipw()`** — cliff-guard removal (no longer needed; structural exclusion replaces it). Column references `c_flag` → `dep_cens`. `dev/smoke_run.R` re-run.
+5. **Workers** (`make_clone`, `fit_gformula`, `fit_ipw`) — `k` as integer `1..K_max`. Baseline-covariate extraction: `pt_data[pt_data$k == 0, ]` → `pt_data[pt_data$k == 1, ]` or pass original subject-level data alongside.
+6. **Contrast + S3 methods** — reporting grid `cut_times[1..K_max]`. `summary(time=)` and `contrast(time=)` reject `time > T_max`. Display layer time-grid notation: `(0, T_max]`.
+7. **Tests** — column renames; new invariants (ipcw scalar/vector accepted; admin censoring at `time > T_max`; `time = 0` event hard error; `time = T_max` event fires at `k = K_max`).
 
-**Open questions still parked**:
-- Symmetrize `models` list shape across workers? `fit_gformula` returns 4 slots (`y, c, A, A_num`), `fit_ipw` returns 5 (adds `c_num`). User said "I don't know" — left asymmetric.
-- Switch IPW weighted glm to `quasibinomial` to silence "non-integer #successes"? Audit pending — see "Weighted GLM family" section below.
-- `apply_weight_truncation()` internally returns `flagged_ids` and `flagged_log`; the orchestrator only surfaces `truncated_ids` (= `flagged_ids`). The per-row `flagged_log` detail is dropped — re-add if a diagnostics accessor needs it.
+**Mostly cascade work**: ~70% from the ipcw consolidation (three-way censoring split), ~20% from integer-`k` change, ~10% from `(a, b]` convention. Same files touched in the same pass.
 
-**Workflow rule from this session — Eyeball-10-30 review**:
+**Workflow rules from this session**:
+
+*Eyeball-10-30 review*:
 1. Show ~10–30 lines at a time in chat as a fenced code block before writing to disk. One logical unit per chunk.
 2. Wait for explicit approval (`ok`, `yes`, `go`, `agree`) before calling Write/Edit. No silent file edits.
 3. Flag design choices baked into the chunk in 2–4 bullets after the code.
@@ -34,7 +41,34 @@ Flagged extensions and known limitations. Not in current scope.
 7. After approval of chunk N, immediately propose chunk N+1.
 8. Preserve user-supplied snippets verbatim if they ask to "keep this somewhere".
 
-Persist this in `CLAUDE.md` to carry it across future sessions automatically.
+*Show-only-.R-diffs* (added mid-session): when working on multi-file refactors that touch spec / TODO / PORT_DEP_GRAPH alongside `R/`, show only the `R/` diffs in chat. Spec / TODO / PORT_DEP_GRAPH edits land silently. Do NOT recap them in post-edit summaries either.
+
+*No silent data drops*: in data-prep / validators, anomalous time values (events at `time = 0`, `time > T_max` if structurally disallowed, etc.) raise hard errors with affected subject id(s). Reserve silent behavior only for cases that are structurally well-defined and always-correct (e.g. admin censoring of `time > T_max` subjects via no-exit-row — that's not "silent drop", it's "no exit row by definition").
+
+Persist these in `CLAUDE.md` to carry across future sessions automatically.
+
+**Open questions still parked** (from previous resume):
+- Symmetrize `models` list shape across workers? `fit_gformula` returns 4 slots (`y, c, A, A_num`), `fit_ipw` returns 5 (adds `c_num`). User said "I don't know" — left asymmetric.
+- Switch IPW weighted glm to `quasibinomial` to silence "non-integer #successes"? Audit pending — see "Weighted GLM family" section below.
+- `apply_weight_truncation()` internally returns `flagged_ids` and `flagged_log`; the orchestrator only surfaces `truncated_ids` (= `flagged_ids`). The per-row `flagged_log` detail is dropped — re-add if a diagnostics accessor needs it.
+
+## Display-layer sweep for `(0, T_max]` interval notation
+
+Spec §3.0.2 locks the interval convention as `(a, b]` (left-open
+right-closed) — matches survSplit native, ABGK / Andersen-Ravn /
+gfoRmula / ipw / mstate / pammtools. Body of `to_person_time()`
+already implements this (no `+1` shift, hard error on `time = 0`
+events).
+
+Display-layer follow-up still pending:
+- `print.causal_survival_fit()` / `summary()` time-grid display:
+  show ranges as `(0, T_max]` not `[0, T_max)`.
+- `print.causal_survival_risk()` / `print.causal_survival_contrast()`:
+  same.
+- `causal_risk_table()` row labels: `(t_{k-1}, t_k]` for each interval.
+- All roxygen examples and the vignette.
+
+Land when those layers get touched in Phase 3.
 
 ## Multi-arm treatment
 
@@ -241,6 +275,23 @@ propensity fits to avoid changing existing behavior).
       (known true effects, edge cases). Not exported.
 - [ ] Vignette: walkthrough on the bundled dataset, both methods, with /
       without bootstrap
+  - **`ipcw` arg semantics + mixed dep / indep censoring sources**.
+    Reader confusion to head off: "if some subjects are labeled `ipcw =
+    FALSE` (indep), do their at-risk rows still feed the dep-cens
+    hazard fit?" Yes, and there is no bias. The cause-specific hazard
+    for dep cens is
+    `λ_dep(k | X) = lim P(dep cens at k | at risk at k, X) / dt`.
+    An indep-labeled subject IS at risk of dep cens at every interval
+    until indep censoring wins the race for them — their `dep_cens = 0`
+    rows are correct denominator contributions, not noise. This is the
+    same logic that lets admin-truncated subjects donate their
+    `dep_cens = 0` rows to the c-hazard fit. The standard "independent
+    competing causes given X" assumption (already required for IPCW to
+    work) is what makes it valid: indep cens cancels in the weight,
+    dep cens is corrected via `1 / (1 - h_dep(k | X))`. Worked example:
+    two subjects, one dep-censored at k=3, one indep-censored at k=5 —
+    trace each subject's rows through the c-hazard glm fit and through
+    the IPCW weight `1 / (1 - h_dep(k | X))`.
 - [ ] README.md with install + minimal example
 - [ ] NEWS.md
 - [ ] LICENSE.md

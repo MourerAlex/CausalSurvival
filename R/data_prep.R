@@ -69,49 +69,56 @@ standardize_treatment <- function(x) {
 #' Prepare Subject-Level Data for Causal Survival Analysis
 #'
 #' Converts subject-level data (one row per subject) into discrete-time
-#' person-time format using [survival::survSplit()]. Derives event-flag
-#' columns (`y_flag`, `c_flag`) on terminal rows, standardizes treatment
-#' to `{0, 1}`, and attaches metadata for downstream estimation.
+#' person-time format using [survival::survSplit()]. Encodes a three-way
+#' event/censoring split (`y_event`, `dep_cens`, `indep_cens`) per spec
+#' §3.0, standardizes treatment to `{0, 1}`, and attaches metadata for
+#' downstream estimation.
 #'
 #' @param data A subject-level data.frame (one row per subject).
 #' @param id Character. Subject identifier column.
 #' @param time Character. Event/censoring time column.
 #' @param status Character. Binary event indicator column
 #'   (`1` = event, `0` = censored).
+#' @param ipcw Logical. Scalar (`TRUE` / `FALSE`) or length-`nrow(data)`
+#'   logical vector classifying each subject's natural censoring
+#'   mechanism. `TRUE` = dependent (subject's censoring contributes to
+#'   the c-hazard fit and gets weighted via IPCW); `FALSE` = independent
+#'   (weight 1, treated as cause-specific competitor). Default `TRUE`
+#'   ("all natural censoring is dependent"). Per-subject vector form is
+#'   the user's a-priori labeling, never inferred from data. Inert under
+#'   `method = "gformula"` (`causal_survival()` warns).
+#' @param T_max Numeric. Administrative truncation horizon. `NULL`
+#'   (default) → `max(data[[time]])`.
 #' @param treatment Character. 2-level treatment column (factor,
 #'   character, logical, or numeric `{0, 1}`).
 #' @param covariates Character vector. Baseline covariate columns.
 #' @param cut_points Time grid specification:
-#'   - `NULL` (default): 12 equi-spaced intervals over `[0, max(time)]`.
+#'   - `NULL` (default): 12 equi-spaced intervals over `(0, T_max]`.
 #'   - Single positive integer: that many equi-spaced intervals.
 #'   - Numeric vector of length >= 2: explicit interior cut points,
-#'     strictly within `(0, max(time))`.
+#'     strictly within `(0, T_max)`.
 #' @param time_varying Reserved for future use. Must be `NULL` in v1.
 #'
 #' @return A data.frame of class `c("person_time", "data.frame")` with
-#'   columns `id, k, treatment, <covariates>, y_flag, c_flag` and
-#'   attributes `cut_times`, `treatment_levels`, `id_col`,
-#'   `treatment_col`, `covariates`.
+#'   columns `id, k, treatment, <covariates>, y_event, dep_cens,
+#'   indep_cens` and attributes `cut_times`, `T_max`, `K_max`,
+#'   `treatment_levels`, `id_col`, `treatment_col`, `covariates`.
 #'
 #' @details
 #' ## Time grid
-#' Event times are shifted by `+1` (`tstop = time + 1`) so that `k = 0`
-#' represents the first at-risk interval. Subjects with `time = 0` land
-#' in `k = 0`.
+#' Intervals are left-open right-closed:
+#' `(0, t_1], (t_1, t_2], ..., (t_{K_max-1}, T_max]`. `k` is the
+#' integer interval index (`1..K_max`); a subject's event time `t`
+#' lands in interval `k` iff `t_{k-1} < t <= t_k`. Events at
+#' `time = 0` are not supported (hard error). Subjects with
+#' `time > T_max` are administratively censored: at-risk rows up to
+#' `k = K_max`, no exit row materialized.
 #'
-#' For example, with `cut_points = 4` and `max(time) = 3` (yearly events
-#' encoded as `time` in `{0, 1, 2, 3}`), the +1 shift produces 4
-#' unit-width intervals labeled by `k`:
-#' - `k = 0` -> `[0, 1)`   "year 1"   (subjects with `time = 0` land here)
-#' - `k = 1` -> `[1, 2)`   "year 2"
-#' - `k = 2` -> `[2, 3)`   "year 3"
-#' - `k = 3` -> `[3, 4)`   "year 4"
-#'
-#' ## survSplit convention
-#' `event_indicator = 1L` is set for ALL subjects (including censored)
-#' before survSplit. This flags the terminal row of every subject so
-#' that `y_flag` and `c_flag` can be derived by combining the indicator
-#' with the original `status` column.
+#' ## Row encoding
+#' Per row, at most one of `{y_event, dep_cens, indep_cens}` is `1`
+#' (exit row); otherwise all three are `0` (at-risk row, including the
+#' final row of admin-censored subjects). Encoding rules per spec
+#' §3.0.4.
 #'
 #' ## Treatment standardization
 #' The treatment column is coerced to integer `{0, 1}` via
@@ -138,12 +145,14 @@ standardize_treatment <- function(x) {
 #'   bypass this builder).
 #' @export
 to_person_time <- function(data,
-                           id = "id",
-                           time = "time",
-                           status = "status",
-                           treatment = "A",
-                           covariates = character(),
-                           cut_points = NULL,
+                           id           = "id",
+                           time         = "time",
+                           status       = "status",
+                           ipcw         = TRUE,
+                           T_max        = NULL,
+                           treatment    = "A",
+                           covariates   = character(),
+                           cut_points   = NULL,
                            time_varying = NULL) {
 
   # --- Input shape + subject-level validation ---
@@ -153,26 +162,64 @@ to_person_time <- function(data,
     covariates = covariates, cut_points = cut_points,
     time_varying = time_varying
   )
+  # TODO: extend validate_subject_level for `ipcw` shape + T_max range.
 
-  # --- Resolve cut_points -> cut_times ---
-  max_time <- max(data[[time]])
+  # Inline ipcw + T_max validation pending the validator extension.
+  if (!is.logical(ipcw) || any(is.na(ipcw))) {
+    stop("`ipcw` must be a non-NA logical scalar or vector.",
+         call. = FALSE)
+  }
+  if (length(ipcw) != 1L && length(ipcw) != nrow(data)) {
+    stop("`ipcw` must have length 1 or nrow(data).", call. = FALSE)
+  }
+
+  # --- Resolve T_max ---
+  if (is.null(T_max)) {
+    T_max <- max(data[[time]])
+  } else if (T_max > max(data[[time]])) {
+    stop("`T_max` must be <= max(data[[time]]).", call. = FALSE)
+  }
+
+  # --- Resolve cut_points -> cut_times (length K_max, last = T_max) ---
   if (is.null(cut_points)) {
-    cut_times <- seq(0, max_time, length.out = 12L + 1L)[-1L]
+    cut_times <- seq(0, T_max, length.out = 12L + 1L)[-1L]
   } else if (length(cut_points) == 1L) {
-    cut_times <- seq(0, max_time, length.out = cut_points + 1L)[-1L]
+    cut_times <- seq(0, T_max, length.out = cut_points + 1L)[-1L]
   } else {
     cut_times <- sort(cut_points)
+    if (cut_times[length(cut_times)] != T_max) {
+      cut_times <- c(cut_times, T_max)
+    }
+  }
+  K_max <- length(cut_times)
+
+  # --- Resolve ipcw to length-n logical vector ---
+  if (length(ipcw) == 1L) ipcw <- rep(ipcw, nrow(data))
+
+  # --- Hard error: events at time = 0 (no home interval under (a, b]) ---
+  events_at_zero <- which(data[[time]] == 0 & data[[status]] == 1)
+  if (length(events_at_zero)) {
+    stop("Event(s) at `time = 0` are not supported: intervals are ",
+         "left-open ((0, t_1] excludes 0). Affected subject id(s): ",
+         paste(data[[id]][events_at_zero], collapse = ", "), ".",
+         call. = FALSE)
   }
 
   # --- Standardize treatment ---
   trt <- standardize_treatment(data[[treatment]])
 
-  # --- Prepare for survSplit ---
+  # --- Prepare for survSplit (intervals are (tstart, tstop]) ---
+  # Subjects with `time > T_max` are admin-censored: tstop capped at
+  # T_max and event_indicator = 0, so survSplit produces at-risk rows
+  # up to k = K_max with no exit row. Events at exactly time = T_max
+  # fire normally at k = K_max (T_max is inside the last interval
+  # under the (a, b] convention).
   df <- data
-  df[[treatment]] <- trt$values
-  df$event_indicator <- 1L
-  df$tstart <- 0
-  df$tstop <- df[[time]] + 1
+  df[[treatment]]    <- trt$values
+  df$.ipcw_label     <- ipcw
+  df$tstart          <- 0
+  df$tstop           <- pmin(df[[time]], T_max)
+  df$event_indicator <- as.integer(df[[time]] <= T_max)
 
   # --- survSplit ---
   pt_data <- survival::survSplit(
@@ -183,37 +230,43 @@ to_person_time <- function(data,
     event = "event_indicator"
   )
 
-  # --- k = 0-based interval index ---
-  pt_data$k <- pt_data$tstart
+  # --- Integer interval index k = 1..K_max ---
+  cut_breaks <- c(0, cut_times[-K_max])
+  pt_data$k  <- match(pt_data$tstart, cut_breaks)
 
-  # --- Derive y_flag, c_flag from terminal rows ---
-  # event_indicator == 1 marks the row where the subject leaves the
-  # study; combine with original status to split into y_flag vs c_flag.
-  pt_data$y_flag <- as.integer(
-    pt_data$event_indicator == 1L & pt_data[[status]] == 1
+  # --- Derive y_event / dep_cens / indep_cens ---
+  # Terminal rows carry event_indicator = 1 (subject exited before T_max).
+  # Combine with status and per-subject ipcw label to split the three
+  # mutually-exclusive indicators per spec §3.0.4.
+  status_col <- pt_data[[status]]
+  ipcw_col   <- pt_data$.ipcw_label
+  pt_data$y_event    <- as.integer(
+    pt_data$event_indicator == 1L & status_col == 1
   )
-  pt_data$c_flag <- as.integer(
-    pt_data$event_indicator == 1L & pt_data[[status]] == 0
+  pt_data$dep_cens   <- as.integer(
+    pt_data$event_indicator == 1L & status_col == 0 & ipcw_col
+  )
+  pt_data$indep_cens <- as.integer(
+    pt_data$event_indicator == 1L & status_col == 0 & !ipcw_col
   )
 
-  # --- Drop survSplit scaffolding + original time/status ---
-  # Original `time` and `status` are dropped: they are redundant with
-  # `k + y_flag + c_flag` once discretized. See dev/TODO.md
-  # "Optional pass-through of original time / status..." — when we
-  # build `simulate_causal_survival_data()`, add a flag to keep them
-  # broadcast on each row for DGP cross-checks against continuous truth.
+  # --- Drop scaffolding + original time/status ---
   pt_data$tstart          <- NULL
   pt_data$tstop           <- NULL
   pt_data$event_indicator <- NULL
+  pt_data$.ipcw_label     <- NULL
   pt_data[[time]]         <- NULL
   pt_data[[status]]       <- NULL
 
-  # --- Reorder columns: id, k, treatment, covariates, y_flag, c_flag ---
-  ordered_cols <- c(id, "k", treatment, covariates, "y_flag", "c_flag")
+  # --- Reorder columns ---
+  ordered_cols <- c(id, "k", treatment, covariates,
+                    "y_event", "dep_cens", "indep_cens")
   pt_data <- pt_data[, ordered_cols, drop = FALSE]
 
   # --- Attach metadata + class ---
   attr(pt_data, "cut_times")        <- cut_times
+  attr(pt_data, "T_max")            <- T_max
+  attr(pt_data, "K_max")            <- K_max
   attr(pt_data, "treatment_levels") <- trt$levels
   attr(pt_data, "id_col")           <- id
   attr(pt_data, "treatment_col")    <- treatment

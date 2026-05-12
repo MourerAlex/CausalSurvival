@@ -12,7 +12,8 @@ suppressPackageStartupMessages({
 pkg_root <- "/home/moureralex/Bureau/cowork/CausalSurvival/.claude/worktrees/vibrant-mirzakhani"
 for (f in c("utils.R", "validate.R", "hazards.R", "weights.R",
             "propensity.R", "data_prep.R", "causal_survival.R",
-            "accessors.R", "bootstrap.R", "print.R", "plot.R")) {
+            "accessors.R", "assumptions.R", "risk_table.R",
+            "bootstrap.R", "print.R", "plot.R")) {
   source(file.path(pkg_root, "R", f))
 }
 
@@ -68,11 +69,16 @@ print(boot)
 print(causal_contrast(fit_g, ci = boot))
 summary(fit_g, ci = boot)
 
-# --- Plots ------------------------------------------------------------------
-p_incidence <- plot(causal_risk(fit_g, scale = "incidence", ci = boot))
-ggsave("dev/smoke_plot_incidence.png",
-       p_incidence, width = 6, height = 4, dpi = 120)
+# --- Assumptions accessor ---------------------------------------------------
+print(causal_assumptions(fit_g))
 
-p_survival <- plot(causal_risk(fit_g, scale = "survival", ci = boot))
-ggsave("dev/smoke_plot_survival.png",
-       p_survival, width = 6, height = 4, dpi = 120)
+# --- Risk-table accessor ----------------------------------------------------
+print(causal_risk_table(fit_g, count = "at_risk"))
+print(causal_risk_table(fit_g, count = "events_y"))
+print(causal_risk_table(fit_g, count = "censored"))
+
+# --- Plots (interactive — top-level renders to active device) ---------------
+print(plot(causal_risk(fit_g, scale = "incidence", ci = boot)))
+print(plot(causal_risk(fit_g, scale = "survival",  ci = boot)))
+print(plot(causal_risk(fit_g, scale = "incidence", ci = boot),
+           risk_table = "at_risk"))

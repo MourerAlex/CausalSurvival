@@ -92,9 +92,17 @@ plot.causal_survival_risk <- function(x,
          "Install via install.packages('ggplot2').", call. = FALSE)
   }
   if (!is.null(risk_table)) {
-    stop("`risk_table` panel is deferred to v0.1.0 polish ",
-         "(depends on causal_risk_table(), step 8b not yet ported). ",
-         "Track in dev/TODO.md.", call. = FALSE)
+    if (!requireNamespace("patchwork", quietly = TRUE)) {
+      stop("risk_table panel requires the 'patchwork' package. ",
+           "Install via install.packages('patchwork').",
+           call. = FALSE)
+    }
+    if (is.null(x$pt_data) || is.null(x$id_col) ||
+        is.null(x$treatment_col) || is.null(x$cut_times)) {
+      stop("risk_table panel needs person-time references on the ",
+           "causal_survival_risk object — refit with ",
+           "`causal_survival(..., keep_data = TRUE)`.", call. = FALSE)
+    }
   }
 
   # --- Slice ---
@@ -192,7 +200,7 @@ plot.causal_survival_risk <- function(x,
       color    = "Arm",
       title    = title %||%
         paste0("Counterfactual ", x$scale,
-               " — causal_survival fit"),
+               " - causal_survival fit"),
       subtitle = subtitle
     ) +
     ggplot2::theme_minimal(base_size = base_size) +
@@ -257,7 +265,121 @@ plot.causal_survival_risk <- function(x,
       )
   }
 
+  # --- Risk table panel (stacked via patchwork) ---
+  if (!is.null(risk_table)) {
+    tbl_plot <- build_risk_table_plot(
+      pt_data   = x$pt_data,
+      id_col    = x$id_col,
+      trt_col   = x$treatment_col,
+      cut_times = x$cut_times,
+      count     = risk_table,
+      base_size = base_size,
+      x_breaks  = shared_x_ticks,
+      x_limits  = shared_x_limits
+    )
+    p <- patchwork::wrap_plots(
+      p, tbl_plot, ncol = 1,
+      heights = c(1, risk_table_height)
+    )
+  }
+
   p
+}
+
+
+#' Build the risk-table panel for stacking below the curves
+#'
+#' Renders the output of [risk_table_internal()] as a minimalist
+#' ggplot (text-on-tick) suitable for patchwork stacking below a
+#' `plot.causal_survival_risk()` curves plot. Aligns its x-axis to
+#' the curves panel via the `x_breaks` / `x_limits` arguments.
+#'
+#' @param pt_data Person-time data.frame.
+#' @param id_col,trt_col Character column names.
+#' @param cut_times Numeric vector of cut times.
+#' @param count One of `"at_risk"`, `"events_y"`, `"censored"`.
+#' @param base_size Base font size (inherited from the parent plot).
+#' @param x_breaks,x_limits Tick positions / axis limits from the
+#'   curves panel, so both panels align under `patchwork::wrap_plots()`.
+#' @return A ggplot2 object.
+#' @family internal
+#' @keywords internal
+build_risk_table_plot <- function(pt_data, id_col, trt_col,
+                                  cut_times, count, base_size = 11,
+                                  x_breaks = NULL, x_limits = NULL) {
+  tbl <- risk_table_internal(pt_data, id_col, trt_col, cut_times, count)
+  arm_cols <- setdiff(names(tbl), "k")
+
+  pretty_ticks <- if (!is.null(x_breaks)) {
+    x_breaks
+  } else {
+    inner <- pretty(c(0, max(cut_times)), n = 5)
+    inner <- inner[inner > 0 & inner < max(cut_times)]
+    sort(unique(c(0, max(cut_times), inner)))
+  }
+  scale_limits <- x_limits %||% c(0, max(cut_times))
+
+  # For each pretty tick, find the nearest cut_times index and pull
+  # the count there. We display the number AT THE PRETTY TICK position.
+  snapped_idx <- vapply(pretty_ticks, function(b) {
+    which.min(abs(tbl$k - b))
+  }, integer(1))
+
+  long <- do.call(rbind, lapply(arm_cols, function(ac) {
+    data.frame(
+      k   = pretty_ticks,
+      arm = ac,
+      n   = tbl[[ac]][snapped_idx],
+      stringsAsFactors = FALSE
+    )
+  }))
+  long$arm <- factor(long$arm, levels = rev(arm_cols))
+
+  title_map <- c(
+    at_risk  = "Number at risk",
+    events_y = "Number of events (Y)",
+    censored = "Number censored"
+  )
+  title_text <- title_map[count] %||% count
+
+  ggplot2::ggplot(long, ggplot2::aes(x = .data$k, y = .data$arm)) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = .data$n),
+      size  = base_size * 0.32,
+      hjust = 0.5
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = pretty_ticks,
+      labels = pretty_ticks,
+      limits = scale_limits,
+      expand = ggplot2::expansion(mult = 0.02)
+    ) +
+    ggplot2::scale_y_discrete(expand = ggplot2::expansion(add = 0.5)) +
+    ggplot2::labs(
+      x     = NULL,
+      y     = trt_col,
+      title = title_text
+    ) +
+    ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid       = ggplot2::element_blank(),
+      panel.background = ggplot2::element_blank(),
+      axis.line.x.bottom = ggplot2::element_line(color = "black",
+                                                 linewidth = 0.4),
+      axis.line.y.left   = ggplot2::element_line(color = "black",
+                                                 linewidth = 0.4),
+      axis.text.x      = ggplot2::element_text(),
+      axis.ticks.x     = ggplot2::element_line(color = "black",
+                                               linewidth = 0.3),
+      axis.ticks.y     = ggplot2::element_blank(),
+      axis.text.y      = ggplot2::element_text(face = "bold"),
+      axis.title.y     = ggplot2::element_text(face = "bold", angle = 90),
+      plot.title       = ggplot2::element_text(
+                           face = "bold",
+                           size = base_size * 0.95
+                         ),
+      plot.title.position = "plot"
+    )
 }
 
 

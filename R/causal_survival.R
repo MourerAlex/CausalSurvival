@@ -249,8 +249,9 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
   )
   model_y <- fit$models$model_y
 
-  # 2. Baseline per subject (k = 0; left-truncation rejected upstream)
-  baseline <- pt_data[pt_data$k == 0, , drop = FALSE]
+  # 2. Baseline per subject (k = 1, first analyzable interval under
+  # the LOCKED (0, t_1] convention; left-truncation rejected upstream)
+  baseline <- pt_data[pt_data$k == 1, , drop = FALSE]
 
   # 3. Per-arm CIF: clone -> predict -> cumprod -> mean -> 1 - S
   cif_by_arm <- lapply(c(0, 1), function(a) {
@@ -302,11 +303,11 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
 #'
 #' | `stabilize`  | propensity numerator | censoring numerator       |
 #' |--------------|----------------------|---------------------------|
-#' | `"marginal"` | `A ~ 1`              | `c_flag ~ A` (when ipcw)  |
+#' | `"marginal"` | `A ~ 1`              | `dep_cens ~ A` (when ipcw)|
 #' | NULL         | none (unstabilized)  | none (unstabilized)       |
 #'
-#' Censoring numerator is fixed to `c_flag ~ A` per H&R Technical Point
-#' 12.2; v1 doesn't expose a `c_num` formula slot.
+#' Censoring numerator is fixed to `dep_cens ~ A` per H&R Technical
+#' Point 12.2; v1 doesn't expose a `c_num` formula slot.
 #'
 #' @keywords internal
 fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
@@ -345,9 +346,15 @@ fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
 
     if (do_stabilize) {
       cnum_fml <- stats::as.formula(
-        paste("c_flag ~", treatment_col)
+        paste("dep_cens ~", treatment_col)
       )
-      cnum_fit <- fit_logistic(cnum_fml, pt_data, "C-hazard (numerator)")
+      # Numerator fit population matches the denominator (spec §3.0.6):
+      # rows with indep_cens == 0.
+      cnum_rows <- pt_data$indep_cens == 0
+      cnum_fit <- fit_logistic(
+        cnum_fml, pt_data[cnum_rows, , drop = FALSE],
+        "C-hazard (numerator)"
+      )
       model_c_num <- cnum_fit$model
       check_c_num <- cnum_fit$check
     }
@@ -386,28 +393,35 @@ fit_ipw <- function(pt_data, id_col, treatment_col, covariates_vec,
   pt_data <- trunc_out$pt_data
 
   # ---------- 5. Combined per-row weight for the Y-MSM ----------
-  combined_w <- if (ipcw) pt_data$w_a * pt_data$w_cens else pt_data$w_a
+  pt_data$w_combined <- if (ipcw) {
+    pt_data$w_a * pt_data$w_cens
+  } else {
+    pt_data$w_a
+  }
 
   # ---------- 6. Weighted Y-MSM fit ----------
   # Default Y-MSM is marginal in covariates: weights handle confounding,
   # so no covariate adjustment in the outcome model. Users can supply
   # `formulas$y` for a covariate-conditional MSM (e.g. for subgroup
   # estimands in v1.1).
+  # Fit population: rows with indep_cens == 0 & dep_cens == 0 (spec §3.0.6).
   time_terms <- "k + I(k^2) + I(k^3)"
   fml_y <- formulas$y %||% stats::as.formula(
-    paste("y_flag ~", paste(c(treatment_col, time_terms), collapse = " + "))
+    paste("y_event ~",
+          paste(c(treatment_col, time_terms), collapse = " + "))
   )
+  y_rows  <- pt_data$indep_cens == 0 & pt_data$dep_cens == 0
   msm_fit <- fit_logistic(
     formula = fml_y,
-    data    = pt_data,
+    data    = pt_data[y_rows, , drop = FALSE],
     label   = "Y-MSM (IPW)",
-    weights = combined_w
+    weights = pt_data$w_combined[y_rows]
   )
   model_y <- msm_fit$model
   check_y <- msm_fit$check
 
   # ---------- 7. Per-arm CIF: clone -> predict -> cumprod -> mean ----------
-  baseline <- pt_data[pt_data$k == 0, , drop = FALSE]
+  baseline <- pt_data[pt_data$k == 1, , drop = FALSE]
   cif_by_arm <- lapply(c(0, 1), function(a) {
     clone <- make_clone(baseline, cut_times, treatment_col, a)
     haz   <- predict_counterfactual_hazard(

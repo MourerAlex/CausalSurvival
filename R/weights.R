@@ -102,7 +102,7 @@ ipw <- function(prob_denom, id, prob_num = NULL) {
 #' @keywords internal
 ipw_static_trt <- function(model_full, pt_data, treatment_col, id_col,
                            time_col = "k", model_num = NULL) {
-  baseline_idx <- pt_data[[time_col]] == 0
+  baseline_idx <- pt_data[[time_col]] == 1
   baseline     <- pt_data[baseline_idx, ]
 
   p_full     <- stats::predict(model_full, newdata = baseline, type = "response")

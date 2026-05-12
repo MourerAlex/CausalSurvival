@@ -9,14 +9,20 @@
 NULL
 
 
-#' Fit Propensity Score Models pi(A | L)
+#' Fit Propensity Score Models
 #'
-#' Fits a logistic propensity-score model on baseline rows for IPW. With
-#' `stabilize = TRUE` (default), also fits a marginal numerator model
-#' (`A ~ 1`) for stabilized weights (Robins / Hernán form).
+#' Estimate the propensity score \eqn{\pi(a \mid l) = \Pr(A = a \mid L = l)}
+#' by logistic regression. With `stabilize = TRUE`, also estimate the
+#' marginal model \eqn{\pi(a) = \Pr(A = a)} for stabilized weights
+#' (Robins & Hernán).
 #'
-#' Baseline rows only (`k == 0`): the package scope is point treatment
-#' (assigned at `k = 0`, frozen thereafter).
+#' Both fits use one row per subject: the row at `k = 1`. Each row
+#' `k` carries \eqn{L_{k-1}}, \eqn{A_{k-1}}, and the event indicator
+#' \eqn{Y_k} (left-edge convention: covariates and treatment apply
+#' from the start of an interval, events occur at the end). In v1 the
+#' treatment is point — \eqn{A_{k-1} = A_0} for all `k` — so the
+#' propensity fit reduces to one row per subject at `k = 1`, carrying
+#' \eqn{A_0} and \eqn{L_0} measured at `k = 0`.
 #'
 #' @param pt_data Person-time data frame.
 #' @param treatment Character. Treatment column name.
@@ -39,7 +45,7 @@ NULL
 fit_propensity <- function(pt_data, treatment, covariates,
                             stabilize = TRUE,
                             formula_full = NULL, formula_num = NULL) {
-  baseline <- pt_data[pt_data$k == 0, ]
+  baseline <- pt_data[pt_data$k == 1, ]
 
   # Full conditioning: A ~ L
   if (is.null(formula_full)) {

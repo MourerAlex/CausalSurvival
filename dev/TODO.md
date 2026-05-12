@@ -231,6 +231,40 @@ propensity fits to avoid changing existing behavior).
 
 ---
 
+## v2 — time-varying covariates and treatment
+
+Out of scope for v1 (spec §1.1) but the v1 design should not paint
+itself into a corner.
+
+- **Formula RHS / `time_terms`.** The hard-coded `"k + I(k^2) + I(k^3)"`
+  in `fit_hazard_models()` is the default time-trend basis. Override
+  is already possible via `formulas$y` / `formulas$c`, but the *shape*
+  of the default should become a knob — e.g. `time_basis =
+  c("poly3", "ns_df4", "factor_k")` — once we have more than one
+  realistic option.
+- **Time-varying baseline covariates `L_k`.** Today `covariates` is a
+  baseline-only channel broadcast to every person-time row. v2 needs
+  a separate `time_varying_covariates` argument (per-row, can vary
+  with `k`) and a formula RHS that references those columns directly.
+  Hazard fits remain pooled-logistic; the row-level RHS just changes.
+- **Time-varying treatment `A_k`.** Propensity moves from baseline
+  `fit_propensity()` to per-interval `fit_propensity_k()` (or a
+  pooled-logistic propensity with `A_k ~ L_k + history`). Weights
+  become time-varying per row (cumulative product across `k`).
+  `ipw_static_trt()` is replaced by a time-varying weight builder.
+- **`ipw_engine = "km"` constraint.** Weighted KM is only well-defined
+  for baseline-`A`; under time-varying `A` the engine must hard-error
+  and route the user to `ipw_engine = "msm"`. This guard is already
+  noted in `dev/ipw-implementation-spec_1.md` open questions.
+- **Stabilization for time-varying `A`.** Numerator becomes
+  `A_k ~ A_{k-1} + V` (Robins/Hernán §12); current marginal numerator
+  collapses to a degenerate case.
+
+Defer all of the above to v2 — flag in roxygen / spec when v1 code
+makes a baseline-only assumption that v2 will need to relax.
+
+---
+
 ## Build / release checklist (v1)
 
 - [ ] `roxygen2::roxygenise()` populates `man/` and `NAMESPACE`

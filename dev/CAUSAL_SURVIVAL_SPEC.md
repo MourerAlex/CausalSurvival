@@ -14,11 +14,22 @@ This section is canonical for the input/output shape of `to_person_time()` and t
 
 ### 3.0.1 Structural ordering
 
-Within each interval `k`, the structural event ordering is **C_admin → C_dep → Y** (Young/Stensrud/Tchetgen/Hernán 2020 Stat Med, with admin censoring placed first):
+Within each interval `k`, the full variable sequence is:
+
+$$L_{k-1} \;\to\; A_{k-1} \;\to\; C^{\text{admin}}_k \;\to\; C^{\text{dep}}_k \;\to\; Y_k.$$
+
+Left-edge variables `L_{k-1}` and `A_{k-1}` are measured (and treatment assigned) at the time point `k - 1`, then apply throughout the interval `(t_{k-1}, t_k]` (Therneau / Hernán & Robins Ch. 17 left-edge / càdlàg convention). Events at the right edge follow the order **C_admin → C_dep → Y** (Young/Stensrud/Tchetgen/Hernán 2020 Stat Med):
 
 - C_admin removes the subject from observation; nothing else can be observed for that subject in that interval.
 - C_dep is informative censoring (LTFU, treatment switch, etc.); fires when C_admin didn't.
 - Y is the event of interest; fires when neither censoring did.
+
+The person-time row for interval `k` therefore carries:
+
+- `L_{k-1}` and `A_{k-1}` as covariate and treatment columns (left-edge values),
+- `y_event`, `dep_cens`, `indep_cens` as right-edge exit indicators (mutually exclusive per §3.0.3).
+
+In v1, treatment is point and baseline covariates are baseline-only, so `A_{k-1} = A_0` and `L_{k-1} = L_0` for every `k`; the values are broadcast forward across all interval rows. v2 (time-varying L, A) extends this carry convention without changing it.
 
 Boundary handling at `t = T_max` under the `(a, b]` convention (§3.0.2):
 - `time = T_max` is **inside** the last interval `(t_{K_max-1}, T_max]`. Events there fire normally at `k = K_max` (`y_event = 1`); censoring there encodes normally (`dep_cens = 1` or `indep_cens = 1`).

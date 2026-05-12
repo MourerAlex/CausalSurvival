@@ -214,12 +214,16 @@ predict_counterfactual_hazard <- function(model, data, treatment_var,
 #'   }
 #'
 #' @details
-#' Default formula: `flag ~ treatment + k + I(k^2) + I(k^3) + covariates`
-#' (additive, no interactions).
+#' Default formula: `<event> ~ treatment + k + I(k^2) + I(k^3) + covariates`
+#' (additive, no interactions). The integer-`k` polynomial in time follows
+#' the LOCKED `(0, t_1], ..., (t_{K_max-1}, T_max]` convention from spec
+#' §3.0.2 — `k` is the interval index, not its left-edge time.
 #'
-#' The Y-hazard model fit here is **unweighted**. The IPW path's weighted
-#' Y-MSM fit is performed downstream in the orchestrator after weights
-#' have been assembled.
+#' Fit populations follow spec §3.0.6:
+#' - Y-hazard (`y_event ~ ...`): rows with `indep_cens == 0 & dep_cens == 0`.
+#' - C-hazard (`dep_cens ~ ...`): rows with `indep_cens == 0`.
+#'
+#' The Y-hazard model fit here is **unweighted**.
 #'
 #' @keywords internal
 fit_hazard_models <- function(pt_data,
@@ -240,23 +244,31 @@ fit_hazard_models <- function(pt_data,
   checks <- list(y = NULL, c = NULL)
 
   # --- Y-hazard model (g-formula path; IPW-MSM Y fit is weighted, done later) ---
+  # Fit population: rows with indep_cens == 0 AND dep_cens == 0 (spec §3.0.6).
   if ("g_formula" %in% active_methods) {
+    y_rows <- pt_data$indep_cens == 0 & pt_data$dep_cens == 0
     fml_y <- formulas$y %||% stats::as.formula(
-      paste("y_flag ~", paste(c(treatment, time_terms, cov_terms),
-                              collapse = " + "))
+      paste("y_event ~", paste(c(treatment, time_terms, cov_terms),
+                               collapse = " + "))
     )
-    fit_result <- fit_logistic(fml_y, pt_data, "Y-hazard")
+    fit_result <- fit_logistic(fml_y, pt_data[y_rows, , drop = FALSE],
+                               "Y-hazard")
     models$model_y <- fit_result$model
     checks$y <- fit_result$check
   }
 
   # --- Censoring model (IPW path with ipcw) ---
+  # Fit population: rows with indep_cens == 0 (spec §3.0.6). The
+  # structural exclusion of indep_cens == 1 rows is what makes the
+  # IPCW cliff impossible (no admin-style rows in the fit).
   if ("ipw" %in% active_methods && ipcw) {
+    c_rows <- pt_data$indep_cens == 0
     fml_c <- formulas$c %||% stats::as.formula(
-      paste("c_flag ~", paste(c(treatment, time_terms, cov_terms),
-                              collapse = " + "))
+      paste("dep_cens ~", paste(c(treatment, time_terms, cov_terms),
+                                collapse = " + "))
     )
-    fit_result <- fit_logistic(fml_c, pt_data, "C-hazard")
+    fit_result <- fit_logistic(fml_c, pt_data[c_rows, , drop = FALSE],
+                               "C-hazard")
     models$model_c <- fit_result$model
     checks$c <- fit_result$check
   }

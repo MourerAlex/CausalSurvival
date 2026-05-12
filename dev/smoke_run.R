@@ -1,45 +1,78 @@
-# dev/smoke_run.R — Phase 3 end-to-end sanity check.
-# Sources R/ files in dep order; runs both methods on synthetic data.
+# dev/smoke_run.R — end-to-end usage on synthetic data, written as a
+# normal user would write it. Top-level expressions are wrapped in
+# print() / summary() because Rscript does not auto-print at the top
+# level (unlike the interactive REPL).
 
 suppressPackageStartupMessages({
   library(stats)
   library(survival)
+  library(ggplot2)
 })
 
-pkg_root <- "/home/moureralex/Bureau/cowork/CausalSurvival"
+pkg_root <- "/home/moureralex/Bureau/cowork/CausalSurvival/.claude/worktrees/vibrant-mirzakhani"
 for (f in c("utils.R", "validate.R", "hazards.R", "weights.R",
-            "propensity.R", "data_prep.R", "causal_survival.R")) {
+            "propensity.R", "data_prep.R", "causal_survival.R",
+            "accessors.R", "bootstrap.R", "print.R", "plot.R")) {
   source(file.path(pkg_root, "R", f))
 }
 
+# --- Synthetic data ---------------------------------------------------------
 set.seed(42)
 n <- 200
 df <- data.frame(
-  id     = seq_len(n),
-  L1     = rnorm(n),
-  L2     = rbinom(n, 1, 0.4)
+  id = seq_len(n),
+  L1 = rnorm(n),
+  L2 = rbinom(n, 1, 0.4)
 )
 df$A      <- rbinom(n, 1, plogis(-0.2 + 0.3 * df$L1 + 0.5 * df$L2))
 df$lambda <- plogis(-2 + 0.3 * df$A + 0.2 * df$L1 + 0.4 * df$L2)
-df$time   <- pmin(rgeom(n, df$lambda), 10L)            # discrete event time
-df$status <- as.integer(df$time < 10L)                 # admin censor at t=10
+df$time   <- pmin(rgeom(n, df$lambda), 10L)
+df$status <- as.integer(df$time < 10L)
 
 pt <- to_person_time(
-  df, id = "id", time = "time", status = "status",
-  treatment = "A", covariates = c("L1", "L2"), cut_points = 5
+  df,
+  id         = "id",
+  time       = "time",
+  status     = "status",
+  treatment  = "A",
+  covariates = c("L1", "L2"),
+  cut_points = 5
 )
-cat("\n--- pt_data shape:", nrow(pt), "rows;", ncol(pt), "cols ---\n")
-print(head(pt, 3))
 
-cat("\n========== gformula ==========\n")
+# --- g-formula --------------------------------------------------------------
 fit_g <- causal_survival(pt, method = "gformula")
-cat("class:", class(fit_g), "\n")
-cat("CI head:\n"); print(head(fit_g$cumulative_incidence$gformula))
-cat("warnings collected:", length(fit_g$warnings), "\n")
+print(fit_g)
+summary(fit_g)
 
-cat("\n========== ipw ==========\n")
-fit_i <- causal_survival(pt, method = "ipw", truncate = c(0.01, 0.99))
-cat("class:", class(fit_i), "\n")
-cat("CI head:\n"); print(head(fit_i$cumulative_incidence$ipw))
-cat("weight summary:\n"); print(fit_i$weights$weight_summary)
-cat("warnings collected:", length(fit_i$warnings), "\n")
+# --- IPW, default engine (km) -----------------------------------------------
+fit_ipw <- causal_survival(pt, method = "ipw", truncate = c(0.01, 0.99))
+print(fit_ipw)
+summary(fit_ipw)
+
+# --- IPW, msm engine --------------------------------------------------------
+fit_msm <- causal_survival(pt, method = "ipw",
+                           truncate = c(0.01, 0.99),
+                           .ipw_engine = "msm")
+print(fit_msm)
+
+# --- Accessors --------------------------------------------------------------
+print(causal_risk(fit_g, scale = "incidence"))
+print(causal_risk(fit_g, scale = "survival"))
+
+# Contrast without CI — emits the loud "interpretation discouraged" warning.
+print(causal_contrast(fit_g))
+
+# --- Bootstrap + contrast with CI ------------------------------------------
+boot <- bootstrap(fit_g, n_boot = 20, alpha = 0.10, seed = 1)
+print(boot)
+print(causal_contrast(fit_g, ci = boot))
+summary(fit_g, ci = boot)
+
+# --- Plots ------------------------------------------------------------------
+p_incidence <- plot(causal_risk(fit_g, scale = "incidence", ci = boot))
+ggsave(file.path(pkg_root, "dev", "smoke_plot_incidence.png"),
+       p_incidence, width = 6, height = 4, dpi = 120)
+
+p_survival <- plot(causal_risk(fit_g, scale = "survival", ci = boot))
+ggsave(file.path(pkg_root, "dev", "smoke_plot_survival.png"),
+       p_survival, width = 6, height = 4, dpi = 120)

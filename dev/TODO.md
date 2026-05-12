@@ -51,6 +51,10 @@ Extension path when needed:
 3. Regimes: enumerated per-arm rather than a `{0, 1}` contrast (cf.
    `interventionK.A = list(static, rep(level, T))` in gfoRmula).
 4. Estimands: pairwise contrasts selectable, with a reference arm.
+5. `causal_contrast()` accepts general `reference` / `contrasts` per
+   spec §3.4 line 266 — reinstate the drafted helper at
+   `dev/unused_code/resolve_contrast_pairs_v2.R` (deferred from
+   v0.1.0 to keep the binary expansion inline).
 
 No architectural lock-in from the current binary-only choice — the
 standardization site is the only place that needs to relax.

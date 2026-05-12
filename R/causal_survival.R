@@ -211,7 +211,7 @@ causal_survival <- function(pt_data,
   fit <- list(
     call                 = cl,
     method               = method,
-    ipw_engine           = if (method == "ipw") ipw_engine else NULL,
+    ipw_engine           = if (method == "ipw") .ipw_engine else NULL,
     cumulative_incidence = ci_list,
     weights              = worker_out$weights,
     models               = worker_out$models,
@@ -337,10 +337,13 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
     1 - S_k
   })
 
-  # 4. Long-format estimates
+  # 4. Long-format estimates (k = integer index 1..K_max per spec §3.0.2;
+  # time = cut_times[k] for human-facing display).
+  K_max <- length(cut_times)
   estimates <- data.frame(
-    treatment = rep(c(0, 1), each = length(cut_times)),
-    k         = rep(cut_times, times = 2),
+    treatment = rep(c(0, 1), each = K_max),
+    k         = rep(seq_len(K_max), times = 2),
+    time      = rep(cut_times, times = 2),
     surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
     inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
   )
@@ -550,9 +553,11 @@ fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
     1 - S_k
   })
 
+  K_max <- length(cut_times)
   estimates <- data.frame(
-    treatment = rep(c(0, 1), each = length(cut_times)),
-    k         = rep(cut_times, times = 2),
+    treatment = rep(c(0, 1), each = K_max),
+    k         = rep(seq_len(K_max), times = 2),
+    time      = rep(cut_times, times = 2),
     surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
     inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
   )
@@ -631,9 +636,11 @@ fit_ipw_km <- function(pt_data, id_col, treatment_col, covariates_vec,
     )
   })
 
+  K_max <- length(cut_times)
   estimates <- data.frame(
-    treatment = rep(c(0, 1), each = length(cut_times)),
-    k         = rep(cut_times, times = 2),
+    treatment = rep(c(0, 1), each = K_max),
+    k         = rep(seq_len(K_max), times = 2),
+    time      = rep(cut_times, times = 2),
     surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
     inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
   )

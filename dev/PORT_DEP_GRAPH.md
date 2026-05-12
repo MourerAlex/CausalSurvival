@@ -61,7 +61,7 @@ canonical spec now lives in `./CAUSAL_SURVIVAL_SPEC.md` § 3.0 (LOCKED
 **`R/data_prep.R`**
 - `to_person_time()`: full rewrite per spec §3.0.5. New args: `ipcw`, `T_max`. Pre-split mode (`event_cols`) dropped per spec §3.0.9. Output columns `y_event` / `dep_cens` / `indep_cens`. Admin-truncated subjects materialized as at-risk rows up to `k = K_max` with no exit row (no K_end). Hard error on any `time = 0`. **Steps 1+2 complete 2026-05-12.**
 - `validate_subject_level()`: new checks for `ipcw` shape (scalar logical or length-`n` logical vector, no NA); `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning). Currently still has the v0.1 signature; checks live inline in `to_person_time()` pending step 4.
-- `validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant; `k ∈ {1, ..., K_max}`. Left-truncation check (was `k = 0`) updated to `k = 1`.
+- ~~`validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant; `k ∈ {1, ..., K_max}`.~~ **Removed 2026-05-12** — spec §3.0.9 drops the BYO pt_data path, so the validator has no live caller. Archived at `dev/unused_code/validate_person_time.R` with the up-to-date schema, in case BYO is reintroduced in v1.x.
 
 **`R/hazards.R`**
 - `fit_hazard_models()`: c-hazard becomes `glm(dep_cens ~ ...)` on rows with `indep_cens = 0`; y-hazard becomes `glm(y_event ~ ...)` on rows with `indep_cens = 0` AND `dep_cens = 0`. Polynomial-in-`k` interpretation shifts from time-value to integer index; formula form unchanged.
@@ -109,7 +109,7 @@ Each chunk is reviewable in isolation; functional state restored only after the 
 1. `to_person_time()` signature + roxygen. **Done 2026-05-12.**
 2. `to_person_time()` inferred-mode body. **Done 2026-05-12.**
 3. ~~`to_person_time()` pre-split mode body + `event_cols` validator.~~ **Dropped** per spec §3.0.9 (pre-split mode deferred to v1.x).
-4. `validate_person_time()` updates — column set + mutual-exclusivity + integer `k` starting at 1.
+4. ~~`validate_person_time()` updates — column set + mutual-exclusivity + integer `k` starting at 1.~~ **Done 2026-05-12 → then removed:** validator drafted to the new schema, then archived to `dev/unused_code/` since spec §3.0.9 drops the BYO pt_data path.
 5. `fit_hazard_models()` — c-hazard / y-hazard fit population changes.
 6. `fit_ipw()` cliff-guard removal + column references; `dev/smoke_run.R` re-run.
 7. Workers (`make_clone`, `fit_gformula`, `fit_ipw`) — `k`-as-integer, baseline extraction. Also wires new `ipw_engine = "km"` worker (`fit_ipw_km`) + shared `fit_ipw_weights` helper per `dev/ipw-implementation-spec_1.md`.
@@ -173,7 +173,7 @@ CLEAN-MOVE classification:
 | `fit_logistic` | `check_fitted_positivity` | hazards.R | **ported** (R/hazards.R) | docstring de-CCR'd |
 | `predict_counterfactual_hazard` | `predict_with_warning` | hazards.R | **ported** (R/hazards.R) | renamed from `predict_hazard_under`; signature now requires `label` |
 | `ipw_cens` | `ipw` | weights.R | **ported** (R/weights.R) | `truncate` arg dropped (consistent with `ipw()`); `model_num` retained for v1.1 stabilized-IPCW path (Phase 3 wires `c ~ A` per H&R §12.6) |
-| `validate_person_time` | `check_covariate_quality` | validate.R | **ported** (R/validate.R) | red flag #1 resolved as TRAP-FORK: `d_flag` dropped, treatment tightened to `{0,1}` (matches downstream IPW contract) |
+| `validate_person_time` | `check_covariate_quality` | validate.R | **ported then archived** | Red flag #1 resolved as TRAP-FORK during port (2026-05-06). Removed from `R/validate.R` on 2026-05-12 because spec §3.0.9 drops the BYO pt_data path. Archived at `dev/unused_code/validate_person_time.R` with the up-to-date schema |
 
 ---
 

@@ -187,9 +187,7 @@ standardize_treatment <- function(x) {
 #'                       treatment = "A", ipcw = ipcw_vec)
 #' }
 #'
-#' @seealso [validate_subject_level()] for the input contract,
-#'   [validate_person_time()] for the output schema (used when users
-#'   bypass this builder).
+#' @seealso [validate_subject_level()] for the input contract.
 #' @export
 to_person_time <- function(data,
                            id = "id",

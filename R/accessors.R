@@ -69,16 +69,12 @@ causal_risk <- function(fit, scale = c("incidence", "survival"),
 #' @keywords internal
 build_risk_long <- function(fit, ci, scale) {
   cum_inc_list <- fit$cumulative_incidence
-  ci_curves    <- if (!is.null(ci)) ci$ci_curves else NULL
-
-  value_col <- if (scale == "incidence") "inc" else "surv"
+  value_col    <- if (scale == "incidence") "inc" else "surv"
 
   rows <- list()
   for (m in names(cum_inc_list)) {
     est <- cum_inc_list[[m]]
     if (is.null(est)) next  # method not fit this run
-
-    bands <- if (!is.null(ci_curves)) ci_curves[[m]] else NULL
 
     out <- data.frame(
       method    = m,
@@ -86,11 +82,31 @@ build_risk_long <- function(fit, ci, scale) {
       k         = est$k,
       time      = est$time,
       value     = est[[value_col]],
-      lower     = if (!is.null(bands)) bands$lower else NA_real_,
-      upper     = if (!is.null(bands)) bands$upper else NA_real_,
+      lower     = NA_real_,
+      upper     = NA_real_,
       stringsAsFactors = FALSE,
       row.names = NULL
     )
+
+    # Join in bootstrap bands when present. Per spec §4.3 the
+    # bootstrap object stores `ci_lower` / `ci_upper` as
+    # data.frames with columns (treatment, k, lower / upper) for the
+    # method that produced the fit; we match by (treatment, k).
+    if (!is.null(ci)) {
+      key_out <- paste(out$treatment, out$k, sep = "|")
+      key_lo  <- paste(ci$ci_lower$treatment, ci$ci_lower$k, sep = "|")
+      key_up  <- paste(ci$ci_upper$treatment, ci$ci_upper$k, sep = "|")
+      out$lower <- ci$ci_lower$lower[match(key_out, key_lo)]
+      out$upper <- ci$ci_upper$upper[match(key_out, key_up)]
+      # When `scale = "survival"`, the cumulative incidence bands
+      # map to survival bands via `S = 1 - F` — flipped order.
+      if (scale == "survival") {
+        flipped_lower <- 1 - out$upper
+        flipped_upper <- 1 - out$lower
+        out$lower <- flipped_lower
+        out$upper <- flipped_upper
+      }
+    }
     rows[[length(rows) + 1L]] <- out
   }
   if (length(rows) == 0L) {

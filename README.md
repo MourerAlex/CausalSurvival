@@ -22,32 +22,36 @@ library(CausalSurvival)
 
 # Convert wide subject-level data to person-time
 pt <- to_person_time(
-  data        = lung_data,
-  id          = "id",
-  time        = "time",
-  event       = "status",
-  treatment   = "trt",
-  covariates  = c("age", "sex"),
-  event_y     = 1,
-  event_c     = 0,
-  n_intervals = 12
+  data       = lung_data,
+  id         = "id",
+  time       = "time",
+  status     = "status",
+  treatment  = "trt",
+  covariates = c("age", "sex"),
+  cut_points = 12
 )
 
 # Fit g-formula
 fit <- causal_survival(pt, method = "gformula")
 
-# Risk curves
-causal_risk(fit)
-
-# Bootstrap CIs
-boot <- bootstrap(fit, n_boot = 500)
-causal_risk(fit, ci = boot)
-
-# Contrasts
-causal_contrast(fit, ci = boot)
-
-# Identifying assumptions
+# One-screen fit summary + identifying assumptions
+summary(fit)
 causal_assumptions(fit)
+
+# Bootstrap CIs (paired with the fit at accessor time)
+boot <- bootstrap(fit, n_boot = 500, seed = 1)
+
+# Risk curves, contrasts, and the at-risk table at each cut time
+causal_risk(fit, ci = boot)
+causal_contrast(fit, ci = boot)
+causal_risk_table(fit, count = "at_risk")
+
+# Single plot: cumulative incidence per arm with 95% CI ribbons and a
+# stacked "Number at risk" table aligned to the same x-axis
+plot(
+  causal_risk(fit, scale = "incidence", ci = boot),
+  risk_table = "at_risk"
+)
 ```
 
 See `vignette("getting-started")` once available.

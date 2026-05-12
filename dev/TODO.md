@@ -269,6 +269,24 @@ makes a baseline-only assumption that v2 will need to relax.
 
 ---
 
+## Bootstrap polish (currently STUB)
+
+`R/bootstrap.R` is a stub: serial loop, `warnings_count = NA_integer_`.
+Progress messages are ported from `separable_effects/R/bootstrap.R`
+lines 109-136. Polish to match spec §3.3:
+
+- Parallel via `future.apply::future_lapply(future.seed = seed)` for
+  reproducible L'Ecuyer streams. (Progress cadence will need to
+  switch from in-loop `message()` to a `progressr` handler when this
+  happens.)
+- Per-replicate `warning()` capture into `warnings_count` (current
+  stub suppresses warnings silently inside the replicate fitter).
+- Inspect what `inherits(boot_data, "person_time")` actually needs
+  preserved across `rbind` — current stub copies all non-built-in
+  attributes. May be fragile.
+
+---
+
 ## Estimand framing — switch to expectation / risk notation
 
 `causal_survival()` roxygen frames the estimand as the survival

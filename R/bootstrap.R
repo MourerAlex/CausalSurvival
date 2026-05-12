@@ -118,17 +118,22 @@ bootstrap <- function(fit, n_boot = 500, alpha = 0.05, seed = NULL) {
   q_lower <- alpha / 2
   q_upper <- 1 - alpha / 2
   if (nrow(replicates) > 0L) {
-    agg <- stats::aggregate(
+    # Compute the two quantiles in separate aggregate calls — the
+    # single-call variant returns a column whose shape depends on
+    # `simplify` and fails subscripting when the FUN result collapses
+    # to a scalar (e.g., constant replicates).
+    lo_agg <- stats::aggregate(
       value ~ treatment + k, data = replicates,
-      FUN = function(v) {
-        c(lower = stats::quantile(v, probs = q_lower, na.rm = TRUE),
-          upper = stats::quantile(v, probs = q_upper, na.rm = TRUE))
-      }
+      FUN = function(v) unname(stats::quantile(v, probs = q_lower, na.rm = TRUE))
     )
-    ci_lower <- data.frame(treatment = agg$treatment, k = agg$k,
-                           lower = agg$value[, "lower"])
-    ci_upper <- data.frame(treatment = agg$treatment, k = agg$k,
-                           upper = agg$value[, "upper"])
+    up_agg <- stats::aggregate(
+      value ~ treatment + k, data = replicates,
+      FUN = function(v) unname(stats::quantile(v, probs = q_upper, na.rm = TRUE))
+    )
+    ci_lower <- data.frame(treatment = lo_agg$treatment, k = lo_agg$k,
+                           lower = lo_agg$value)
+    ci_upper <- data.frame(treatment = up_agg$treatment, k = up_agg$k,
+                           upper = up_agg$value)
   } else {
     ci_lower <- data.frame(treatment = numeric(), k = integer(),
                            lower = numeric())

@@ -26,7 +26,7 @@ df <- data.frame(
 )
 df$A      <- rbinom(n, 1, plogis(-0.2 + 0.3 * df$L1 + 0.5 * df$L2))
 df$lambda <- plogis(-2 + 0.3 * df$A + 0.2 * df$L1 + 0.4 * df$L2)
-df$time   <- pmin(rgeom(n, df$lambda), 10L)
+df$time   <- pmin(rgeom(n, df$lambda) + 1L, 10L)
 df$status <- as.integer(df$time < 10L)
 
 pt <- to_person_time(
@@ -70,9 +70,9 @@ summary(fit_g, ci = boot)
 
 # --- Plots ------------------------------------------------------------------
 p_incidence <- plot(causal_risk(fit_g, scale = "incidence", ci = boot))
-ggsave(file.path(pkg_root, "dev", "smoke_plot_incidence.png"),
+ggsave("dev/smoke_plot_incidence.png",
        p_incidence, width = 6, height = 4, dpi = 120)
 
 p_survival <- plot(causal_risk(fit_g, scale = "survival", ci = boot))
-ggsave(file.path(pkg_root, "dev", "smoke_plot_survival.png"),
+ggsave("dev/smoke_plot_survival.png",
        p_survival, width = 6, height = 4, dpi = 120)

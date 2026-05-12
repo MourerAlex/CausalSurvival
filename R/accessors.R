@@ -256,16 +256,27 @@ compute_contrast_table <- function(fit, pairs, ci) {
       estimate <- contrast_op(F_a, F_b, op)
 
       if (!is.null(reps)) {
-        # reps[[m]] expected as 3D array [k, arm, boot_id]; collapse
-        # along boot to lower/upper quantiles of the per-replicate
-        # contrast.
-        reps_a   <- reps[[m]][, as.character(a), , drop = TRUE]
-        reps_b   <- reps[[m]][, as.character(b), , drop = TRUE]
-        per_rep  <- contrast_op(reps_a, reps_b, op)
-        lower    <- apply(per_rep, 1L, stats::quantile,
-                          probs = alpha / 2,       na.rm = TRUE)
-        upper    <- apply(per_rep, 1L, stats::quantile,
-                          probs = 1 - alpha / 2,   na.rm = TRUE)
+        # `reps` is long-format `data.frame(boot_id, treatment, k,
+        # value)` per spec §4.3. Reshape to a `[k, boot_id]` matrix
+        # per arm, compute the contrast per (k, boot_id), then take
+        # quantiles along the boot_id axis.
+        wide_a <- tapply(
+          reps$value[reps$treatment == a],
+          list(reps$k[reps$treatment == a],
+               reps$boot_id[reps$treatment == a]),
+          identity
+        )
+        wide_b <- tapply(
+          reps$value[reps$treatment == b],
+          list(reps$k[reps$treatment == b],
+               reps$boot_id[reps$treatment == b]),
+          identity
+        )
+        per_rep <- contrast_op(wide_a, wide_b, op)
+        lower   <- apply(per_rep, 1L, stats::quantile,
+                         probs = alpha / 2,       na.rm = TRUE)
+        upper   <- apply(per_rep, 1L, stats::quantile,
+                         probs = 1 - alpha / 2,   na.rm = TRUE)
       } else {
         lower <- rep(NA_real_, length(estimate))
         upper <- rep(NA_real_, length(estimate))

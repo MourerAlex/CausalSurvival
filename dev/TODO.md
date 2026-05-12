@@ -265,6 +265,31 @@ makes a baseline-only assumption that v2 will need to relax.
 
 ---
 
+## Estimand framing — switch to expectation / risk notation
+
+`causal_survival()` roxygen frames the estimand as the survival
+function `S^a(t) = P(T^a > t)`. Correct but not the canonical
+causal-inference framing (Hernán & Robins, Stensrud), which leads
+with risk / expectation:
+
+- per-interval risk under arm `a` with treatment-dependent censoring
+  set to 0: `E[Y_k^{a, c = 0}] = P(Y_k^{a, c = 0} = 1)`
+- contrast: `E[Y_k^{a=1, c=0}] - E[Y_k^{a=0, c=0}]` (risk
+  difference) and ratios thereof
+- under our three-way censoring split, `c` is the
+  treatment-dependent component `c^d` (`dep_cens`); the independent
+  component `c^i` (`indep_cens`) is handled by the at-risk set, not
+  by intervention
+- competing-event / separable extensions are expressed on
+  `E[Y_k^{a_Y, a_D, c = 0}]`
+
+Rewrite the description + `@details` to lead with
+`E[Y_k^{a, c = 0}]` (or equivalently the cumulative incidence
+`F^a(t) = P(T^a \le t, C^{d,a} = 0)`) and demote `S^a(t)` to a
+secondary view.
+
+---
+
 ## Build / release checklist (v1)
 
 - [ ] `roxygen2::roxygenise()` populates `man/` and `NAMESPACE`

@@ -343,17 +343,23 @@ weighted_hazard_by_k <- function(event, k, weights) {
 #'
 #' @param y_event Numeric vector of Y event indicators. See
 #'   [weighted_hazard_by_k()] for the at-risk encoding.
-#' @param k Vector of interval indices.
+#' @param k Integer vector of interval indices (1..K_max under spec
+#'   §3.0.2). Used as the grouping key for the weighted-hazard fit.
 #' @param weights Numeric vector of per-row weights.
-#' @param cut_times Numeric vector of time points to evaluate at.
-#' @return Numeric vector of cumulative incidence at each
-#'   `cut_times[k]`.
+#' @param cut_times Numeric vector `c(t_1, ..., T_max)`. Used here for
+#'   its length `K_max` (the result is reported at each interval
+#'   index `1..K_max`, position-aligned with `cut_times`).
+#' @return Numeric vector of cumulative incidence at each interval
+#'   index, length `K_max`.
 #' @keywords internal
 cum_inc_from_weighted <- function(y_event, k, weights, cut_times) {
+  K_max      <- length(cut_times)
   haz_y_by_k <- weighted_hazard_by_k(y_event, k, weights)
 
-  # Align to requested cut_times (missing k -> 0 hazard)
-  key       <- as.character(cut_times)
+  # Key by integer interval index 1..K_max (spec §3.0.2). Missing
+  # indices (no events / no at-risk rows in that interval for this
+  # arm) -> hazard of 0.
+  key       <- as.character(seq_len(K_max))
   haz_y_vec <- unname(haz_y_by_k[key])
   haz_y_vec[is.na(haz_y_vec)] <- 0
 

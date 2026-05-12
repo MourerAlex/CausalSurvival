@@ -2,13 +2,16 @@
 
 Live artifact tracking the dependency-ordered port of 17 functions from
 CausalCompetingRisks (CCR) to CausalSurvival, per spec §12.3
-(`../../separable_effects/dev/CAUSAL_SURVIVAL_SPEC.md`).
+(`./CAUSAL_SURVIVAL_SPEC.md`).
 
 Updated as functions are ported. Status: **Phase 3 in progress**.
 Phase 1 + Phase 2 complete — all port-set functions either ported or
-deferred (snap_time, weighted_hazard_by_k, cum_inc_from_weighted); Phase 2
-trap-fresh-writes landed (`to_person_time`, `validate_subject_level`,
-`standardize_treatment`, `fit_hazard_models`).
+deferred (snap_time still deferred until accessors land in Phase 3);
+`weighted_hazard_by_k` and `cum_inc_from_weighted` un-deferred
+2026-05-12 to support the new `ipw_engine = "km"` (see
+`dev/ipw-implementation-spec_1.md`). Phase 2 trap-fresh-writes landed
+(`to_person_time`, `validate_subject_level`, `standardize_treatment`,
+`fit_hazard_models`).
 
 Phase 3 progress:
 - `causal_survival()` skeleton: signature + arg validation written; worker
@@ -18,8 +21,17 @@ Phase 3 progress:
   worker written. CIF math validated against gfoRmula's `simulate.R`
   (per-subject `poprisk_i = cumsum(h * S(t-1))` ↔ ours `1 - mean_i S_i(t)`,
   algebraically identical for single event).
-- IPW path: `fit_ipw()` landed. Smoke test (commit `084fe98`) revealed
-  IPCW weight cliff at K_max from the v0.1.0 admin-censoring encoding.
+- IPW path: `fit_ipw()` (MSM) landed. Smoke test (commit `084fe98`)
+  revealed IPCW weight cliff at K_max from the v0.1.0 admin-censoring
+  encoding → triggered data-convention overhaul (below). New
+  `ipw_engine = "km"` engine added per
+  `dev/ipw-implementation-spec_1.md`; helpers
+  `weighted_hazard_by_k` + `cum_inc_from_weighted` un-deferred + ported
+  to `R/hazards.R` (2026-05-12). Worker integration
+  (`fit_ipw_km` + shared `fit_ipw_weights`) bundled into step 7 of the
+  overhaul below.
+- Data-convention overhaul (below): steps 1+2 done 2026-05-12
+  (`to_person_time()` signature + roxygen + inferred-mode body).
 - Accessors / bootstrap / S3 methods: not yet started.
 
 ---
@@ -32,54 +44,56 @@ get `c_flag = 1` at the last interval, which collides with the c-hazard
 fit (`h_C(K_max) ≈ 1` → IPCW weight `1 / (1 - h_C) ≈ 1e11`).
 
 After methodology review, the data convention has been overhauled. The
-canonical spec now lives in `~/Bureau/cowork/separable_effects/dev/CAUSAL_SURVIVAL_SPEC.md` § 3.0 (LOCKED 2026-05-08). Highlights:
+canonical spec now lives in `./CAUSAL_SURVIVAL_SPEC.md` § 3.0 (LOCKED
+2026-05-08). Highlights:
 
 - Column schema changes: `y_flag` / `c_flag` → `y_event` / `dep_cens` / `indep_cens`.
 - Structural ordering C_admin → C_dep → Y; admin censoring placed first within each interval.
-- `k` becomes integer interval index `1..K_end` (was: left-edge interval time).
-- One catchup interval `K_end = K_max + 1` materialized; all subjects who reached `T_max` at risk get `indep_cens = 1` at K_end.
-- `cens_type` arg (scalar or per-subject vector, "dependent"/"independent"); `T_max` arg with default `max(time)`.
-- C_admin wins ties at `T_max` (events at `time >= T_max` silently dropped).
-- Hard error if `T_max > max(time)`; warning if `mean(admin_reach) < 0.5`.
+- `k` becomes integer interval index `1..K_max` (was: left-edge interval time).
+- Admin-truncated subjects (`time > T_max`) contribute at-risk rows up to `k = K_max` with no exit row. **No K_end interval is materialized** (§3.0.8).
+- `ipcw` arg (scalar logical or per-subject logical vector, default `TRUE` = dependent censoring); `T_max` arg with default `max(time)`.
+- Boundary at `t = T_max`: events at `time = T_max` fire normally at `k = K_max`; only `time > T_max` is admin-truncated (§3.0.1).
+- Hard error if `T_max > max(time)`; hard error on any `time = 0`; warning if `mean(admin_reach) < 0.5`.
 - Cliff structurally impossible: `indep_cens = 1` rows never enter the c-hazard fit (model fits on `indep_cens = 0` rows only).
 
 ### Phase 3 refactor inventory (per-file changes)
 
 **`R/data_prep.R`**
-- `to_person_time()`: full rewrite per spec §3.0.5. New args: `cens_type`, `T_max`, `event_cols`. Output columns `y_event` / `dep_cens` / `indep_cens`. K_end materialization. Diagnostic message for events at `t = 0`.
-- `validate_subject_level()`: new checks for `cens_type` shape (scalar or length-`n` vector, values in `{"dependent","independent"}`); `status ∈ {0, 1}`; `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning).
-- `validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant; `k ∈ {1, ..., K_end}`; K_end rows must all carry `indep_cens = 1`.
+- `to_person_time()`: full rewrite per spec §3.0.5. New args: `ipcw`, `T_max`. Pre-split mode (`event_cols`) dropped per spec §3.0.9. Output columns `y_event` / `dep_cens` / `indep_cens`. Admin-truncated subjects materialized as at-risk rows up to `k = K_max` with no exit row (no K_end). Hard error on any `time = 0`. **Steps 1+2 complete 2026-05-12.**
+- `validate_subject_level()`: new checks for `ipcw` shape (scalar logical or length-`n` logical vector, no NA); `T_max ≤ max(time)` (hard error); `mean(admin_reach) < 0.5` (warning). Currently still has the v0.1 signature; checks live inline in `to_person_time()` pending step 4.
+- `validate_person_time()`: column set `{y_event, dep_cens, indep_cens}`; mutual-exclusivity invariant; `k ∈ {1, ..., K_max}`. Left-truncation check (was `k = 0`) updated to `k = 1`.
 
 **`R/hazards.R`**
 - `fit_hazard_models()`: c-hazard becomes `glm(dep_cens ~ ...)` on rows with `indep_cens = 0`; y-hazard becomes `glm(y_event ~ ...)` on rows with `indep_cens = 0` AND `dep_cens = 0`. Polynomial-in-`k` interpretation shifts from time-value to integer index; formula form unchanged.
 
 **`R/weights.R`**
-- `ipw_cens()`: column references `c_flag` → `dep_cens`. Rows at K_end auto-excluded (no c-hazard prediction there). No cliff guard needed — replaced by structural exclusion.
+- `ipw_cens()`: column references `c_flag` → `dep_cens`. No cliff guard needed — replaced by structural exclusion of `indep_cens = 1` rows from the c-hazard fit.
 - `ipw()`, `ipw_static_trt()`: column renames only; logic stable.
 
 **`R/causal_survival.R` workers (gformula, ipw)**
-- `make_clone()`: clone `k` values become integer `1..K_max` (K_end excluded; predictions only reported up to T_max).
+- `make_clone()`: clone `k` values become integer `1..K_max`. Predictions reported over the full `cut_times[1..K_max]` grid.
 - G-formula worker: predicts `y_event` hazard on the clone for `k = 1..K_max`. Cumprod survival over those K_max steps.
-- IPW worker: weighted Y-MSM glm fits on rows with `indep_cens = 0` AND `dep_cens = 0` only. Combined weight `w_a * w_cens` as before.
-- Baseline-covariate extraction: `pt_data[pt_data$k == 0, ]` → either `pt_data[pt_data$k == 1, ]` or pass the original subject-level data alongside.
+- IPW worker: weighted Y-MSM glm fits on rows with `indep_cens = 0` AND `dep_cens = 0` only. Combined weight `w_a * w_cens` as before. Also gains `ipw_engine = "km"` engine per `dev/ipw-implementation-spec_1.md` (un-defers `weighted_hazard_by_k` + `cum_inc_from_weighted`, ported 2026-05-12).
+- Baseline-covariate extraction: `pt_data[pt_data$k == 0, ]` → `pt_data[pt_data$k == 1, ]`.
 
 **`R/contrast.R` + S3 methods**
-- Reporting time grid: `cut_times[1..K_max]`, K_end excluded.
+- Reporting time grid: `cut_times[1..K_max]`.
 - `summary(time=)` and `contrast(time=)` validators reject `time > T_max` (was: silent extrapolation).
 
 **`R/utils.R` / `R/print.person_time.R`**
-- `print.person_time()` header: display `K_max`, `K_end`, `T_max` attributes.
+- `print.person_time()` header: display `K_max`, `T_max` attributes.
 - Helpers filtering on `c_flag` → `dep_cens`.
 
 **Tests** (`tests/testthat/`)
 - All references to `y_flag` / `c_flag` columns → renamed.
-- Tests hard-coding `k = c(0, 2, 4, ...)` → updated to integer `k = 1..K_end`.
+- Tests hard-coding `k = c(0, 2, 4, ...)` → updated to integer `k = 1..K_max`.
 - New tests:
-  - `cens_type` accepted as scalar and as length-n vector.
+  - `ipcw` accepted as scalar logical and as length-n logical vector; NA in `ipcw` errors.
   - Hard error on `T_max > max(time)`.
+  - Hard error on any `time = 0`.
   - Warning on `mean(admin_reach) < 0.5`.
-  - K_end materialization + `indep_cens = 1` invariant.
-  - C_admin wins ties at T_max (`status=1, time=T_max` → `indep_cens=1` at K_end, no `y_event=1` row).
+  - Admin-truncation invariant: subjects with `time > T_max` have at-risk rows up to `k = K_max` with all three flags `= 0` and no exit row.
+  - Boundary at `T_max`: `status=1, time=T_max` → `y_event=1` at `k = K_max` (NOT admin-truncated).
   - Cliff regression test: smoke run from commit `084fe98` should now complete with finite weights.
 
 **`dev/smoke_run.R`** — DGP updated; verify `summarize_weights()` no longer reports max ~1e11.
@@ -88,17 +102,17 @@ canonical spec now lives in `~/Bureau/cowork/separable_effects/dev/CAUSAL_SURVIV
 
 **Roxygen** — all column references in roxygen blocks across the codebase. `devtools::document()` regenerates `NAMESPACE` and `man/*.Rd`.
 
-### Refactor execution order (next session)
+### Refactor execution order
 
 Each chunk is reviewable in isolation; functional state restored only after the whole run.
 
-1. `to_person_time()` signature + roxygen (chunk 1, drafted in 2026-05-08 session).
-2. `to_person_time()` inferred-mode body.
-3. `to_person_time()` pre-split mode body + `event_cols` validator.
-4. `validate_person_time()` updates.
+1. `to_person_time()` signature + roxygen. **Done 2026-05-12.**
+2. `to_person_time()` inferred-mode body. **Done 2026-05-12.**
+3. ~~`to_person_time()` pre-split mode body + `event_cols` validator.~~ **Dropped** per spec §3.0.9 (pre-split mode deferred to v1.x).
+4. `validate_person_time()` updates — column set + mutual-exclusivity + integer `k` starting at 1.
 5. `fit_hazard_models()` — c-hazard / y-hazard fit population changes.
 6. `fit_ipw()` cliff-guard removal + column references; `dev/smoke_run.R` re-run.
-7. Workers (`make_clone`, `fit_gformula`, `fit_ipw`) — `k`-as-integer, baseline extraction.
+7. Workers (`make_clone`, `fit_gformula`, `fit_ipw`) — `k`-as-integer, baseline extraction. Also wires new `ipw_engine = "km"` worker (`fit_ipw_km`) + shared `fit_ipw_weights` helper per `dev/ipw-implementation-spec_1.md`.
 8. Contrast + S3 methods — reporting grid, time validators.
 9. Tests — column renames + new invariant tests.
 10. `devtools::document()`; full `R CMD check`.
@@ -140,8 +154,8 @@ CLEAN-MOVE classification:
 | `snap_time` | accessors.R | **deferred to Phase 3** | only callers (`contrast()`, `summary()`) are Phase-3 surface; re-port when those land |
 | `cumprod_survival` | hazards.R | **ported** (R/hazards.R) | doc tightened: time-order precondition |
 | `predict_with_warning` | gformula_core.R → **hazards.R** | **ported** (R/hazards.R) | moved file (logical home is hazards.R) |
-| `weighted_hazard_by_k` | ipw_core.R | **deferred** | non-parametric Hajek estimator; v1 IPW path is parametric MSM (`fit_logistic` + `predict_counterfactual_hazard`), so no v1 caller. Re-port if v1.x adds a non-parametric (weighted-KM-style) IPW method |
-| `cum_inc_from_weighted` | ipw_core.R | **deferred** | thin wrapper over `weighted_hazard_by_k`; v1 parametric-MSM path reuses `predict_counterfactual_hazard` + `cumprod_survival` (no D factor needed for single-event), so no v1 caller. Re-port paired with `weighted_hazard_by_k` if v1.x adds non-parametric Hajek IPW |
+| `weighted_hazard_by_k` | ipw_core.R | **scheduled (un-deferred 2026-05-12)** | non-parametric Hajek estimator. Required by new `ipw_engine = "km"` (default IPW engine) per `dev/ipw-implementation-spec_1.md`. Lands in `R/hazards.R` |
+| `cum_inc_from_weighted` | ipw_core.R | **scheduled (un-deferred 2026-05-12)** | thin wrapper over `weighted_hazard_by_k`. Single-event variant: `d_event` arg dropped (no competing event D in CausalSurvival). Required by `ipw_engine = "km"`. Lands in `R/hazards.R` |
 | `check_covariate_quality` | validate.R | **ported** (R/validate.R) | NA + unsupported-type promoted to hard errors (was warnings in CCR) |
 | `validate_input_shape` | validate.R | **ported** (R/validate.R) | |
 | `check_fitted_positivity` | hazards.R | **ported** (R/hazards.R) | |

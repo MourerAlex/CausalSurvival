@@ -119,12 +119,16 @@ check_covariate_quality <- function(data, covariates) {
 #' @details
 #' ## Hard errors
 #' - NULL column names
-#' - Required columns missing (id, treatment, k, y_flag, c_flag)
+#' - Required columns missing (id, treatment, k, y_event, dep_cens,
+#'   indep_cens)
 #' - NAs in id or treatment
 #' - Flag columns contain values other than 0, 1, or NA
+#' - Mutual-exclusivity invariant violated (more than one of
+#'   `{y_event, dep_cens, indep_cens}` equals 1 in the same row)
 #' - Duplicate (id, k) pairs
 #' - Treatment not coded as {0, 1}
-#' - Left-truncated subjects (no row at k = 0)
+#' - `k` not integer, negative, or zero (must be `>= 1`)
+#' - Left-truncated subjects (no row at k = 1)
 #' - Covariate NAs or unsupported types (via [check_covariate_quality()])
 #'
 #' ## Warnings
@@ -145,7 +149,8 @@ validate_person_time <- function(pt_data,
   }
 
   # --- Required person-time columns ---
-  required <- c(id, treatment, "k", "y_flag", "c_flag", covariates)
+  flag_cols <- c("y_event", "dep_cens", "indep_cens")
+  required  <- c(id, treatment, "k", flag_cols, covariates)
   missing_cols <- setdiff(required, names(pt_data))
   if (length(missing_cols) > 0) {
     stop(
@@ -169,7 +174,7 @@ validate_person_time <- function(pt_data,
   }
 
   # --- Flag columns must contain only {0, 1, NA} ---
-  for (flag_col in c("y_flag", "c_flag")) {
+  for (flag_col in flag_cols) {
     vals <- unique(pt_data[[flag_col]])
     vals_nona <- vals[!is.na(vals)]
     if (!all(vals_nona %in% c(0L, 1L, 0, 1))) {
@@ -179,6 +184,22 @@ validate_person_time <- function(pt_data,
         call. = FALSE
       )
     }
+  }
+
+  # --- Mutual-exclusivity: at most one of {y_event, dep_cens,
+  #     indep_cens} can be 1 in any given row (spec §3.0.3) ---
+  flag_sum <- rowSums(
+    pt_data[, flag_cols, drop = FALSE] == 1L,
+    na.rm = TRUE
+  )
+  if (any(flag_sum > 1)) {
+    n_bad <- sum(flag_sum > 1)
+    stop(
+      "Mutual-exclusivity invariant violated in ", n_bad, " row(s): ",
+      "more than one of {y_event, dep_cens, indep_cens} equals 1. ",
+      "Each row must encode at most one terminal event.",
+      call. = FALSE
+    )
   }
 
   # --- Treatment must be {0, 1} ---
@@ -193,6 +214,23 @@ validate_person_time <- function(pt_data,
     )
   }
 
+  # --- k must be integer-valued and >= 1 (spec §3.0.2) ---
+  k_vals <- pt_data$k
+  if (any(is.na(k_vals))) {
+    stop("Column 'k' contains NA values.", call. = FALSE)
+  }
+  if (!is.numeric(k_vals) || any(k_vals != as.integer(k_vals))) {
+    stop("Column 'k' must contain integer values.", call. = FALSE)
+  }
+  if (any(k_vals < 1)) {
+    stop(
+      "Column 'k' must be >= 1 (interval index starts at 1 under the ",
+      "(0, t_1], ..., (t_{K_max-1}, T_max] convention). ",
+      "Found min k = ", min(k_vals), ".",
+      call. = FALSE
+    )
+  }
+
   # --- Duplicate (id, k) check ---
   dupes <- duplicated(pt_data[, c(id, "k")])
   if (any(dupes)) {
@@ -203,16 +241,17 @@ validate_person_time <- function(pt_data,
     )
   }
 
-  # --- Left-truncation check: every subject must have a k = 0 row ---
-  # Left-truncated data (subjects first observed at k > 0) is not supported
-  # in v1 and will not be supported in future versions. This is a structural
-  # assumption of the discrete-time pooled logistic framework.
+  # --- Left-truncation check: every subject must have a k = 1 row ---
+  # Left-truncated data (subjects first observed at k > 1) is not
+  # supported in v1 and will not be supported in future versions. This
+  # is a structural assumption of the discrete-time pooled logistic
+  # framework.
   min_k_per_subject <- tapply(pt_data$k, pt_data[[id]], min)
-  if (any(min_k_per_subject > 0)) {
-    n_affected <- sum(min_k_per_subject > 0)
+  if (any(min_k_per_subject > 1)) {
+    n_affected <- sum(min_k_per_subject > 1)
     stop(
       "Left-truncated data is not supported. ",
-      n_affected, " subject(s) have no row at k = 0. ",
+      n_affected, " subject(s) have no row at k = 1. ",
       "Every subject must be observed from the first interval onward.",
       call. = FALSE
     )

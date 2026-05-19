@@ -299,7 +299,7 @@ cumprod_survival <- function(haz, id) {
 #' k. At-risk rows are those with non-NA `event` (the convention is
 #' that NA means the subject is no longer at risk for this event type
 #' at this k). Framework-agnostic vector primitive used by the
-#' `ipw_engine = "km"` survival estimator.
+#' `ipw_estimator = "km"` survival estimator.
 #'
 #' Ported from CausalCompetingRisks (`R/ipw_core.R`), un-deferred
 #' 2026-05-12 to support `fit_ipw_km()`.

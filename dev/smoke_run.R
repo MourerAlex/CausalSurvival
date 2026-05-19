@@ -45,15 +45,17 @@ fit_g <- causal_survival(pt, method = "gformula")
 print(fit_g)
 summary(fit_g)
 
-# --- IPW, default engine (km) -----------------------------------------------
-fit_ipw <- causal_survival(pt, method = "ipw", truncate = c(0.01, 0.99))
-print(fit_ipw)
-summary(fit_ipw)
+# --- IPW, default km estimator ----------------------------------------------
+# NOTE: variable named fit_km (not fit_ipw) to avoid shadowing the
+# fit_ipw() dispatch helper defined in R/causal_survival.R.
+fit_km <- causal_survival(pt, method = "ipw", truncate = c(0.01, 0.99))
+print(fit_km)
+summary(fit_km)
 
-# --- IPW, msm engine --------------------------------------------------------
+# --- IPW, msm estimator -----------------------------------------------------
 fit_msm <- causal_survival(pt, method = "ipw",
                            truncate = c(0.01, 0.99),
-                           .ipw_engine = "msm")
+                           .ipw_estimator = "msm")
 print(fit_msm)
 
 # --- Accessors --------------------------------------------------------------

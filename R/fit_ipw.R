@@ -5,7 +5,7 @@
 #   - fit_ipw()           dispatch shim (km / msm), called from R/causal_survival.R
 #   - fit_ipw_weights()   shared weight builder (propensity x IPCW)
 #   - fit_ipw_msm()       weighted pooled-logistic Y-MSM survival estimator
-#   - fit_ipw_km()        weighted Hajek pooled-hazard survival estimator
+#   - fit_ipw_km()        weighted pooled-hazard Kaplan-Meier estimator
 #
 # fit_ipw_msm() reuses make_clone() from R/fit_gformula.R via the package
 # namespace (no explicit import needed).

@@ -2,44 +2,17 @@
 # G-formula worker for causal_survival(method = "gformula").
 #
 # Exposes:
-#   - make_clone()     internal helper, also used by fit_ipw_msm() in R/fit_ipw.R
 #   - fit_gformula()   internal worker dispatched from R/causal_survival.R
+#
+# Uses make_clone() from R/utils.R (shared with fit_ipw_msm() in R/fit_ipw.R).
 # ----------------------------------------------------------------------------
 
 
-#' Clone Baseline Across Interval Indices
-#'
-#' Broadcast each subject's baseline row across all `K_max` interval
-#' indices, setting the treatment column to a fixed value `a`. Used by
-#' the g-formula and IPW-MSM workers to predict counterfactual hazards
-#' at every (subject, k) regardless of the subject's observed
-#' event/censoring time.
-#'
-#' The `k` column on the clone holds the integer interval index
-#' (`1..K_max`), matching the fit-time encoding of the Y-hazard / Y-MSM
-#' model. The time grid `cut_times` is preserved on the calling side
-#' (e.g. via `attr(pt_data, "cut_times")`) for report-time alignment.
-#'
-#' @param baseline data.frame. One row per subject (typically
-#'   `pt_data[pt_data$k == 1, ]`).
-#' @param cut_times Numeric vector of interval-end times `t_1, ..., T_max`.
-#'   Used here only for its length `K_max`.
-#' @param treatment_col Character. Treatment column name.
-#' @param a Numeric (0 or 1). Counterfactual treatment value.
-#' @return data.frame with `nrow(baseline) * K_max` rows.
-#' @keywords internal
-make_clone <- function(baseline, cut_times, treatment_col, a) {
-  n <- nrow(baseline)
-  K <- length(cut_times)
-  clone <- baseline[rep(seq_len(n), each = K), , drop = FALSE]
-  clone$k                <- rep(seq_len(K), times = n)
-  clone[[treatment_col]] <- a
-  rownames(clone) <- NULL
-  clone
-}
-
-
 #' G-Formula Cumulative Incidence Worker
+#'
+#' Estimand: \eqn{E[Y_k^{a, c=0}]} under conditional exchangeability given
+#' baseline `L_0`. Identification: discrete-time g-formula recursion over
+#' the Y-hazard.
 #'
 #' Single-event parametric g-formula. Fits an unweighted Y-hazard pooled
 #' logistic model, then for each arm `a in {0, 1}`:
@@ -74,7 +47,7 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
     pt_data        = pt_data,
     treatment      = treatment_col,
     covariates     = covariates_vec,
-    active_methods = "g_formula",
+    active_methods = "gformula",
     formulas       = formulas,
     ipcw           = FALSE
   )

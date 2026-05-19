@@ -199,8 +199,8 @@ predict_counterfactual_hazard <- function(model, data, treatment_var,
 #'   Y- and C-hazard formulas (no working-copy column).
 #' @param covariates Character vector. Covariate column names.
 #' @param active_methods Character vector. Subset of
-#'   `c("g_formula", "ipw")`. Determines which models get fit:
-#'   - `"g_formula"`: model_y only
+#'   `c("gformula", "ipw")`. Determines which models get fit:
+#'   - `"gformula"`: model_y only
 #'   - `"ipw"`:       model_c (only when `ipcw = TRUE`)
 #' @param formulas Named list or NULL. User-specified formulas (names `y`,
 #'   `c`). Any entry absent falls back to the default.
@@ -245,7 +245,7 @@ fit_hazard_models <- function(pt_data,
 
   # --- Y-hazard model (g-formula path; IPW-MSM Y fit is weighted, done later) ---
   # Fit population: rows with indep_cens == 0 AND dep_cens == 0 (spec §3.0.6).
-  if ("g_formula" %in% active_methods) {
+  if ("gformula" %in% active_methods) {
     y_rows <- pt_data$indep_cens == 0 & pt_data$dep_cens == 0
     fml_y <- formulas$y %||% stats::as.formula(
       paste("y_event ~", paste(c(treatment, time_terms, cov_terms),

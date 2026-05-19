@@ -28,7 +28,7 @@
 #' - `method = "ipw"`: inverse-probability weighting. Build the
 #'   product weight (treatment and, when applicable, censoring) and
 #'   estimate the counterfactual hazard in each arm by a weighted
-#'   Hajek pooled-hazard (default, nonparametric in `k`) or by a
+#'   pooled-hazard Kaplan-Meier estimator (default, nonparametric in `k`) or by a
 #'   weighted pooled-logistic marginal structural model
 #'   (`.ipw_estimator = "msm"`); the risk is recovered from the
 #'   hazards.
@@ -57,7 +57,7 @@
 #'   subject-level input it was built from) are retained on the
 #'   returned fit.
 #' @param .ipw_estimator Internal. Survival-curve estimator under
-#'   `method = "ipw"`: `"km"` (default, weighted Hajek pooled hazard,
+#'   `method = "ipw"`: `"km"` (default, weighted pooled-hazard Kaplan-Meier,
 #'   nonparametric in `k`) or `"msm"` (weighted pooled logistic with
 #'   the cubic-in-`k` default). The leading dot flags this as a
 #'   developer-facing knob.

@@ -292,7 +292,7 @@ cumprod_survival <- function(haz, id) {
 }
 
 
-#' Weighted Hazard by Interval (Hajek Ratio)
+#' Weighted Hazard by Interval (Weighted Ratio)
 #'
 #' Per-interval weighted incidence: numerator is the weighted count of
 #' events at each k, denominator is the weighted count at risk at each
@@ -326,7 +326,7 @@ weighted_hazard_by_k <- function(event, k, weights) {
 #' Cumulative Incidence from Weighted Person-Time (Single-Event)
 #'
 #' Discrete-time cumulative incidence of `Y` computed from per-row
-#' event indicators and Hajek-weighted hazards. Single-event variant
+#' event indicators and weighted hazards. Single-event variant
 #' (no competing event D), suitable for the CausalSurvival single-
 #' outcome setting. Caller is responsible for restricting inputs to a
 #' single standing-in arm.

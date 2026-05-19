@@ -218,14 +218,7 @@ fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
     1 - S_k
   })
 
-  K_max <- length(cut_times)
-  estimates <- data.frame(
-    treatment = rep(c(0, 1), each = K_max),
-    k         = rep(seq_len(K_max), times = 2),
-    time      = rep(cut_times, times = 2),
-    surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
-    inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
-  )
+  estimates <- make_estimates_long(cif_by_arm, cut_times)
 
   list(
     estimates    = estimates,
@@ -250,7 +243,7 @@ fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
 #' IPW Cumulative Incidence — Weighted KM Engine
 #'
 #' Estimate the counterfactual cumulative incidence under each arm by
-#' a weighted Hajek pooled-hazard estimator:
+#' a weighted pooled-hazard Kaplan-Meier estimator:
 #' \deqn{\hat\lambda^a_k \;=\;
 #'   \frac{\sum_i W_i\, 1\{Y_{ik}=1,\, A_i = a\}}
 #'        {\sum_i W_i\, 1\{\text{at risk at } k,\, A_i = a\}},
@@ -279,7 +272,7 @@ fit_ipw_km <- function(pt_data, id_col, treatment_col, covariates_vec,
   )
   pt_data <- w_out$pt_data
 
-  # ---------- 6. Weighted Hajek pooled hazard per arm ----------
+  # ---------- 6. Weighted pooled hazard per arm (Kaplan-Meier-style) ----------
   # Fit population (per spec §3.0.6 / §1 KM symmetry with the Y-MSM
   # fit): rows with indep_cens == 0 & dep_cens == 0.
   cif_by_arm <- lapply(c(0, 1), function(a) {
@@ -297,14 +290,7 @@ fit_ipw_km <- function(pt_data, id_col, treatment_col, covariates_vec,
     )
   })
 
-  K_max <- length(cut_times)
-  estimates <- data.frame(
-    treatment = rep(c(0, 1), each = K_max),
-    k         = rep(seq_len(K_max), times = 2),
-    time      = rep(cut_times, times = 2),
-    surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
-    inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
-  )
+  estimates <- make_estimates_long(cif_by_arm, cut_times)
 
   list(
     estimates    = estimates,

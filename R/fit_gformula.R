@@ -78,14 +78,7 @@ fit_gformula <- function(pt_data, id_col, treatment_col, covariates_vec,
 
   # 4. Long-format estimates (k = integer index 1..K_max per spec §3.0.2;
   # time = cut_times[k] for human-facing display).
-  K_max <- length(cut_times)
-  estimates <- data.frame(
-    treatment = rep(c(0, 1), each = K_max),
-    k         = rep(seq_len(K_max), times = 2),
-    time      = rep(cut_times, times = 2),
-    surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
-    inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
-  )
+  estimates <- make_estimates_long(cif_by_arm, cut_times)
 
   list(
     estimates    = estimates,

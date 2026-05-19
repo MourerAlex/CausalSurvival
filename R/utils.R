@@ -40,3 +40,28 @@ make_clone <- function(baseline, cut_times, treatment_col, a) {
   rownames(clone) <- NULL
   clone
 }
+
+
+#' Build the long-format estimates data.frame
+#'
+#' Reshape a list of per-arm CIF vectors (`cif_by_arm[[1]]` for `a = 0`,
+#' `cif_by_arm[[2]]` for `a = 1`) into the canonical long-format
+#' data.frame used by all `causal_survival_fit$cumulative_incidence`
+#' slots: `2 * K_max` rows, columns `treatment`, `k`, `time`, `surv`,
+#' `inc`. Shared by `fit_gformula()`, `fit_ipw_msm()`, and `fit_ipw_km()`.
+#'
+#' @param cif_by_arm List of length 2 with per-arm CIF vectors of length
+#'   `K_max`.
+#' @param cut_times Numeric vector of interval-end times.
+#' @return data.frame with `2 * length(cut_times)` rows.
+#' @keywords internal
+make_estimates_long <- function(cif_by_arm, cut_times) {
+  K_max <- length(cut_times)
+  data.frame(
+    treatment = rep(c(0, 1), each = K_max),
+    k         = rep(seq_len(K_max), times = 2),
+    time      = rep(cut_times, times = 2),
+    surv      = c(1 - cif_by_arm[[1]], 1 - cif_by_arm[[2]]),
+    inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
+  )
+}

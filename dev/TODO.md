@@ -312,6 +312,38 @@ secondary view.
 
 ---
 
+## Methodology vocabulary audit — survey-sampling vs survival register
+
+The package occasionally uses methodologically-correct but pedagogically
+heavy register from survey-sampling literature (e.g. "Hájek pooled-hazard
+estimator") where the survival / causal-inference literature uses simpler
+canonical names (e.g. "weighted Kaplan-Meier" / "IPW KM" — Hernán & Robins
+ch. 17; Cole & Hernán 2004).
+
+**Already done (2026-05-19)**: replaced "Hájek pooled-hazard estimator"
+with "weighted pooled-hazard Kaplan-Meier estimator" across `R/*.R` files.
+The Hájek qualifier is technically accurate (denominator = sum of weights
+vs Horvitz-Thompson's N) but unfamiliar in survival writing. Removal is a
+readability win, not a correctness fix. See
+`memory/project_methodology_vocabulary.md` for the rationale.
+
+**TODO**: do a fresh scan across `R/*.R` and roxygen for other terms that
+may carry the same register mismatch. Candidates to check:
+
+- Mathematical notation choices that lean survey-sampling rather than
+  survival (e.g. explicit ratio-estimator notation where a hazard/CIF
+  formulation would read more naturally to the target audience).
+- Any place where a less-familiar canonical name is used when a standard
+  H&R / Andersen-Ravn / Geskus term exists.
+- Internal column naming (`y_event`, `dep_cens`, `indep_cens`, etc.) —
+  these are package-internal and intentionally explicit; do NOT rename
+  without a separate rule-change pass.
+
+Apply replacements `.R`-side only (dev/*.md mentions stay until a
+documentation sweep).
+
+---
+
 ## Build / release checklist (v1)
 
 - [ ] `roxygen2::roxygenise()` populates `man/` and `NAMESPACE`

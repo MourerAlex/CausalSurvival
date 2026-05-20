@@ -8,7 +8,7 @@
 #' can supply a necessary-but-not-sufficient check, when one exists.
 #'
 #' Untestable conditions are reported as `status = "untestable"`;
-#' checkable ones as `status = "checkable"`. No data-driven flag is
+#' testable ones as `status = "testable"`. No data-driven flag is
 #' set inside this accessor — the corresponding diagnostic must be
 #' invoked separately.
 #'
@@ -30,7 +30,9 @@ causal_assumptions <- function(fit) {
         statement = paste0(
           "Y^a = Y when A = a — the observed outcome under the ",
           "received treatment equals the counterfactual outcome ",
-          "under that same treatment."
+          "under that same treatment; no hidden version of the ",
+          "treatment. Usually understandable from domain knowledge ",
+          "(impact of the surgeon, device brand, dosing, ...)."
         ),
         status    = "untestable",
         pointer   = NA_character_
@@ -51,14 +53,15 @@ causal_assumptions <- function(fit) {
           "with positive density — both arms are reachable for ",
           "every covariate stratum encountered in the data."
         ),
-        status    = "checkable",
+        status    = "testable",
         pointer   = "causal_diagnostic(fit)$weight_summary"
       ),
       list(
         name      = "No interference",
         statement = paste0(
           "One subject's treatment does not affect another ",
-          "subject's potential outcomes."
+          "subject's potential outcomes. Generally can be assumed ",
+          "to be true."
         ),
         status    = "untestable",
         pointer   = NA_character_
@@ -103,7 +106,7 @@ print.causal_survival_assumptions <- function(x, ...) {
   cat("-----------------------------------------------------\n")
   for (i in seq_along(x)) {
     a <- x[[i]]
-    tag <- if (a$status == "checkable") "[checkable]" else "[untestable]"
+    tag <- if (a$status == "testable") "[testable]" else "[untestable]"
     cat(sprintf("%d. %s  %s\n", i, a$name, tag))
     cat("   ", a$statement, "\n", sep = "")
     if (!is.na(a$pointer)) {

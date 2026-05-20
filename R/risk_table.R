@@ -14,10 +14,16 @@
 #'   \describe{
 #'     \item{`"at_risk"`}{Number of subjects with a row at `k` (still
 #'       under observation through interval `k`).}
-#'     \item{`"events_y"`}{Number of `Y` events in interval `k`
-#'       (`y_event == 1`).}
+#'     \item{`"events_y"`}{**Cumulative** count of `Y` events up to and
+#'       including interval `k` (sum of per-interval `y_event == 1`
+#'       from interval 1 to `k`). Matches ggsurvfit's `cum.event`
+#'       convention.}
+#'     \item{`"events_y_interval"`}{**Per-interval** count of `Y`
+#'       events occurring exactly in interval `k` (the previous
+#'       behavior of `"events_y"` before v0.2; kept for hazard-density
+#'       reporting).}
 #'     \item{`"censored"`}{Number of subjects censored in interval
-#'       `k` (`dep_cens == 1` or `indep_cens == 1`).}
+#'       `k` (`dep_cens == 1` or `indep_cens == 1`). Per-interval.}
 #'   }
 #'
 #' @return A data.frame with column `k` and one column per observed
@@ -28,9 +34,17 @@
 #' @export
 causal_risk_table <- function(fit,
                               count = c("at_risk", "events_y",
-                                        "censored")) {
+                                        "events_y_interval", "censored")) {
   stopifnot(inherits(fit, "causal_survival_fit"))
-  count <- match.arg(count)
+  # Explicit %in% (not match.arg) to avoid partial matching, e.g.
+  # "events" -> "events_y" silently.
+  valid_counts <- c("at_risk", "events_y", "events_y_interval", "censored")
+  if (length(count) > 1L) count <- count[[1L]]
+  if (!count %in% valid_counts) {
+    stop("`count` must be one of: ",
+         paste(shQuote(valid_counts), collapse = ", "),
+         ". Got: ", shQuote(count), ".", call. = FALSE)
+  }
   if (is.null(fit$pt_data)) {
     stop("`fit$pt_data` is NULL; refit with `keep_data = TRUE` to ",
          "compute a risk table.", call. = FALSE)
@@ -58,7 +72,8 @@ causal_risk_table <- function(fit,
 #' @param cut_times Numeric vector of cut times. The function looks
 #'   up rows by the integer interval index `1..length(cut_times)`,
 #'   then reports counts aligned with the cut-time values.
-#' @param count One of `"at_risk"`, `"events_y"`, `"censored"`.
+#' @param count One of `"at_risk"`, `"events_y"` (cumulative),
+#'   `"events_y_interval"` (per-interval), or `"censored"`.
 #' @return A data.frame with `k` (= cut time value) plus one
 #'   per-arm count column.
 #' @family internal
@@ -76,13 +91,16 @@ risk_table_internal <- function(pt_data, id_col, trt_col,
                             pt_data$k == k_int, , drop = FALSE]
       if (count == "at_risk") {
         length(unique(rows_a_k[[id_col]]))
-      } else if (count == "events_y") {
+      } else if (count == "events_y" || count == "events_y_interval") {
+        # Per-interval Y-events; "events_y" (cumulative) wraps in cumsum below.
         as.integer(sum(rows_a_k$y_event, na.rm = TRUE))
       } else {
         as.integer(sum(rows_a_k$dep_cens, na.rm = TRUE) +
                      sum(rows_a_k$indep_cens, na.rm = TRUE))
       }
     }, integer(1))
+    # Promote per-interval Y-events to cumulative for "events_y".
+    if (count == "events_y") vals <- cumsum(vals)
     result[[col_name]] <- vals
   }
   result

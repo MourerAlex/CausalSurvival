@@ -162,6 +162,37 @@ fit_ipw_weights <- function(pt_data, id_col, treatment_col,
 #' clone-predict-marginalize. The MSM is parametric in `k`
 #' (`y_event ~ A + k + I(k^2) + I(k^3)` by default).
 #'
+#' Equivalent unrolled per-arm form (kept here for explanatory reference;
+#' the implementation uses an `lapply` over both arms to avoid
+#' duplication):
+#'
+#' ```
+#' # (after fit_ipw_weights() has attached the per-row IPW weight
+#' #  `w_combined` to pt_data)
+#'
+#' # 1. Weighted pooled-logistic Y-MSM fit. The IPW weight enters HERE
+#' #    via the `weights =` argument and gets baked into model_y's
+#' #    coefficients.
+#' y_rows  <- pt_data$indep_cens == 0 & pt_data$dep_cens == 0
+#' fml_y   <- y_event ~ A + k + I(k^2) + I(k^3)
+#' model_y <- fit_logistic(fml_y, pt_data[y_rows, , drop = FALSE],
+#'                         label   = "Y-MSM (IPW)",
+#'                         weights = pt_data$w_combined[y_rows])$model
+#'
+#' # 2. Per-arm marginalization. Weights no longer appear here — they
+#' #    already shaped model_y's coefficients above.
+#' baseline     <- pt_data[pt_data$k == 1, , drop = FALSE]
+#' clone        <- make_clone(baseline, cut_times, treatment_col, a)
+#' haz_a1       <- predict_counterfactual_hazard(model_y, clone,
+#'                                               treatment_col, 1, "Y-MSM a=1")
+#' haz_a0       <- predict_counterfactual_hazard(model_y, clone,
+#'                                               treatment_col, 0, "Y-MSM a=0")
+#' S_a1         <- cumprod_survival(haz_a1, clone[[id_col]])
+#' S_a0         <- cumprod_survival(haz_a0, clone[[id_col]])
+#' surv_a1_by_k <- tapply(S_a1, clone$k, mean)
+#' surv_a0_by_k <- tapply(S_a0, clone$k, mean)
+#' ```
+#'
 #' @keywords internal
 fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
                         cut_times, formulas, ipcw, stabilize, truncate) {
@@ -255,6 +286,26 @@ fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
 #' Requires baseline treatment. The arm-specific risk set is undefined
 #' under time-varying `A`; use [fit_ipw_msm()] in that case. v1
 #' restricts the package to baseline `A`.
+#'
+#' Equivalent unrolled per-arm form (kept here for explanatory reference;
+#' the implementation uses an `lapply` over both arms to avoid
+#' duplication):
+#'
+#' ```
+#' # (after fit_ipw_weights() has attached w_combined to pt_data)
+#' rows_a1 <- pt_data[pt_data[[treatment_col]] == 1 &
+#'                    pt_data$dep_cens   == 0 &
+#'                    pt_data$indep_cens == 0, , drop = FALSE]
+#' rows_a0 <- pt_data[pt_data[[treatment_col]] == 0 &
+#'                    pt_data$dep_cens   == 0 &
+#'                    pt_data$indep_cens == 0, , drop = FALSE]
+#' cif_a1  <- cum_inc_from_weighted(
+#'              y_event = rows_a1$y_event, k = rows_a1$k,
+#'              weights = rows_a1$w_combined, cut_times = cut_times)
+#' cif_a0  <- cum_inc_from_weighted(
+#'              y_event = rows_a0$y_event, k = rows_a0$k,
+#'              weights = rows_a0$w_combined, cut_times = cut_times)
+#' ```
 #'
 #' @keywords internal
 fit_ipw_km <- function(pt_data, id_col, treatment_col, covariates_vec,

@@ -41,14 +41,26 @@
 #' @export
 causal_risk <- function(fit, scale = c("incidence", "survival"),
                         ci = NULL) {
+
+  # 1. Validate / canonicalize args.
   stopifnot(inherits(fit, "causal_survival_fit"))
   scale <- match.arg(scale)
   if (!is.null(ci)) {
     stopifnot(inherits(ci, "causal_survival_bootstrap"))
   }
+
+  # 2. Pivot fit$cumulative_incidence into the long-format risk table.
+  #    One row per (method, treatment, k); folds in bootstrap CI bands
+  #    when `ci` is supplied. (See build_risk_long() below.)
+  risk <- build_risk_long(fit, ci, scale)
+
+  # 3. Assemble S3 output. Fit references (pt_data, id_col, treatment_col,
+  #    cut_times) travel through so plot.causal_survival_risk() can render
+  #    the optional risk-table panel; replicates + alpha carry the
+  #    bootstrap context for per-contrast bands.
   structure(
     list(
-      risk          = build_risk_long(fit, ci, scale),
+      risk          = risk,
       scale         = scale,
       replicates    = if (!is.null(ci)) ci$replicates else NULL,
       alpha         = if (!is.null(ci)) ci$alpha      else NULL,
@@ -66,8 +78,9 @@ causal_risk <- function(fit, scale = c("incidence", "survival"),
 #'
 #' Pivot `fit$cumulative_incidence` (per-method long table with
 #' columns `treatment`, `k`, `time`, `surv`, `inc`) and optionally
-#' `ci$ci_curves` (per-method long bands) into the canonical accessor
-#' shape used by [causal_risk()].
+#' the bootstrap bands `ci$ci_lower` / `ci$ci_upper` (per-method long
+#' data.frames with columns `treatment`, `k`, `lower` / `upper`) into
+#' the canonical accessor shape used by [causal_risk()].
 #'
 #' @param fit A `"causal_survival_fit"` object.
 #' @param ci A `"causal_survival_bootstrap"` object or `NULL`.

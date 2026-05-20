@@ -200,17 +200,88 @@ to_person_time <- function(data,
                            cut_points = NULL,
                            time_varying = NULL) {
 
-  # --- Input shape + subject-level validation ---
+  # 1. Input shape: non-NULL, data.frame, > 0 rows.
   validate_input_shape(data, "data")
+
+  # 2. Subject-level checks: required columns, id uniqueness, time /
+  #    status / treatment / cut_points / covariate quality. Hard errors
+  #    on structural problems that would corrupt the long-format output.
   validate_subject_level(
     data, id = id, time = time, status = status, treatment = treatment,
     covariates = covariates, cut_points = cut_points,
     time_varying = time_varying
   )
-  # NOTE: ipcw / T_max validation lives here for now; will move into
-  # validate_subject_level() in Phase 3 step 4 of the refactor.
 
-  # --- Resolve T_max ---
+  # 3. Canonicalize args: resolve T_max default, reject time = 0 events,
+  #    coerce ipcw to a length-nrow logical vector, resolve cut_points
+  #    into cut_times over (0, T_max], and standardize treatment to
+  #    integer {0, 1}. Returns a canonical args list with T_max,
+  #    cut_times, K_max, ipcw_vec, and the trt mapping (values + original
+  #    level labels).
+  args <- .canonicalize_to_person_time_args(
+            data, id, time, status, ipcw, T_max, treatment,
+            covariates, cut_points, time_varying)
+
+  # 4. Discretize subject-level data into person-time. Caps event times
+  #    at T_max (admin-truncated subjects keep their at-risk rows up to
+  #    k = K_max), runs survival::survSplit() on cut_times, and tags
+  #    each row with the integer interval index k under the
+  #    (0, t_1], ..., (t_{K_max-1}, T_max] convention.
+  pt <- .discretize_person_time(args)
+
+  # 5. Assemble the three-way exit flag triple (y_event, dep_cens,
+  #    indep_cens) on terminal rows. Admin-truncated subjects' terminal
+  #    row is forced back to at-risk (all three flags 0); otherwise the
+  #    row splits by status + ipcw per spec §3.0.4.
+  pt <- .assemble_exit_flags(pt, args)
+
+  # 6. Drop survSplit scaffolding (tstart / tstop / event_indicator),
+  #    the original time / status columns, and the broadcast helper
+  #    columns; reorder to the canonical (id, k, treatment, covariates,
+  #    y_event, dep_cens, indep_cens) layout.
+  pt <- .tidy_person_time_columns(pt, args)
+
+  # 7. Diagnostic: warn when more than 50% of individuals are censored
+  #    before reaching end of follow-up or having an event — i.e., the
+  #    union of (subjects reaching k = K_max) and (subjects with an
+  #    event at any k) covers less than 50% of the sample. Fit proceeds
+  #    either way.
+  .check_admin_reach(pt, args)
+
+  # 8. Stamp metadata attributes (cut_times, T_max, K_max,
+  #    treatment_levels, id_col, treatment_col, covariates) and the S3
+  #    class c("person_time", "data.frame") onto the output.
+  .stamp_person_time_class(pt, args)
+}
+
+
+# ----------------------------------------------------------------------------
+# Internal helpers for to_person_time(). All plumbing (arg canonicalization,
+# survSplit prep, flag assembly, column tidy, diagnostics, S3 stamping) lives
+# here so the public API body above stays a clean methodological pipeline
+# (one named verb per tile).
+# ----------------------------------------------------------------------------
+
+#' Canonicalize `to_person_time()` arguments
+#'
+#' Resolves `T_max` from `data[[time]]` when `NULL`, rejects any
+#' `time = 0` rows (no home interval under the `(0, t_1]` convention),
+#' coerces `ipcw` to a length-`nrow(data)` logical vector, resolves
+#' `cut_points` to a sorted `cut_times` vector over `(0, T_max]`, and
+#' standardizes the treatment column to integer `{0, 1}` (capturing the
+#' original level mapping). Returns a canonical, normalized argument
+#' list consumed by all downstream helpers in this file.
+#'
+#' Shape-level validators (`validate_input_shape()`,
+#' `validate_subject_level()`) are called upstream in
+#' [to_person_time()] before this helper runs.
+#'
+#' @keywords internal
+.canonicalize_to_person_time_args <- function(data, id, time, status, ipcw,
+                                              T_max, treatment, covariates,
+                                              cut_points, time_varying) {
+
+  # Resolve T_max
   max_time <- max(data[[time]])
   if (is.null(T_max)) {
     T_max <- max_time
@@ -219,12 +290,7 @@ to_person_time <- function(data,
          "). Would create empty trailing intervals.", call. = FALSE)
   }
 
-  # --- Hard error: any time = 0 (no home interval under (0, t_1]) ---
-  # Subjects with time = 0 have no follow-up window, so they cannot
-  # be placed in any analyzable interval. Errored regardless of
-  # status to avoid a silent drop by survSplit (tstop = 0 produces
-  # no rows). NA-safe: validate_subject_level already rejects NA in
-  # time/status, but check defensively in case validator is bypassed.
+  # Hard error: any time = 0 (no home interval under (0, t_1])
   zero_time <- which(data[[time]] == 0)
   if (length(zero_time) > 0) {
     ids <- data[[id]][zero_time]
@@ -235,7 +301,7 @@ to_person_time <- function(data,
          "Drop or recode these subjects upstream.", call. = FALSE)
   }
 
-  # --- Resolve ipcw shape ---
+  # Resolve ipcw shape
   if (length(ipcw) == 1L) {
     ipcw_vec <- rep(as.logical(ipcw), nrow(data))
   } else if (length(ipcw) == nrow(data)) {
@@ -250,8 +316,7 @@ to_person_time <- function(data,
          call. = FALSE)
   }
 
-  # --- Resolve cut_points -> cut_times over (0, T_max] ---
-  # cut_times holds the right endpoints t_1 < ... < t_{K_max} = T_max.
+  # Resolve cut_points -> cut_times over (0, T_max]
   if (is.null(cut_points)) {
     cut_times <- seq(0, T_max, length.out = 12L + 1L)[-1L]
   } else if (length(cut_points) == 1L) {
@@ -266,93 +331,159 @@ to_person_time <- function(data,
   }
   K_max <- length(cut_times)
 
-  # --- Standardize treatment ---
+  # Standardize treatment (raw -> integer {0, 1} + original level mapping)
   trt <- standardize_treatment(data[[treatment]])
 
-  # --- Identify admin-truncated subjects (time > T_max).  These get
-  #     no exit row; their final at-risk row is at k = K_max. ---
-  admin_trunc <- data[[time]] > T_max
+  list(
+    data       = data,
+    id         = id,
+    time       = time,
+    status     = status,
+    treatment  = treatment,
+    covariates = covariates,
+    T_max      = T_max,
+    cut_times  = cut_times,
+    K_max      = K_max,
+    ipcw_vec   = ipcw_vec,
+    trt        = trt
+  )
+}
 
-  # --- Prepare for survSplit ---
-  # Cap times at T_max so survSplit produces rows up to k = K_max for
-  # admin-truncated subjects. event_indicator = 1 will be suppressed
-  # on those rows later.
-  df <- data
-  df[[treatment]] <- trt$values
-  df[[time]]      <- pmin(df[[time]], T_max)
-  df$event_indicator <- 1L
-  df$tstart <- 0
-  df$tstop  <- df[[time]]
 
-  # Broadcast subject-level metadata for per-row flag assembly.
-  df$.ipcw_subject        <- ipcw_vec
+#' Discretize subject-level data into person-time via `survSplit`
+#'
+#' Caps event times at `T_max` so admin-truncated subjects retain
+#' at-risk rows up to `k = K_max` (their terminal `event_indicator = 1`
+#' is suppressed later by [.assemble_exit_flags()]). Broadcasts the
+#' per-subject `ipcw`, admin-truncation flag, and original status onto
+#' helper columns so flag assembly can split rows by reason. Tags each
+#' row with the integer interval index `k` under the
+#' `(0, t_1], ..., (t_{K_max-1}, T_max]` convention.
+#'
+#' @keywords internal
+.discretize_person_time <- function(args) {
+
+  # Identify admin-truncated subjects (time > T_max). These get no exit
+  # row; their final at-risk row is at k = K_max.
+  admin_trunc <- args$data[[args$time]] > args$T_max
+
+  # Prepare survSplit input: capped time, mapped treatment, scaffolding
+  # columns, broadcast subject-level helpers.
+  df <- args$data
+  df[[args$treatment]]    <- args$trt$values
+  df[[args$time]]         <- pmin(df[[args$time]], args$T_max)
+  df$event_indicator      <- 1L
+  df$tstart               <- 0
+  df$tstop                <- df[[args$time]]
+  df$.ipcw_subject        <- args$ipcw_vec
   df$.admin_trunc_subject <- admin_trunc
-  df$.status_subject      <- df[[status]]
+  df$.status_subject      <- df[[args$status]]
 
-  # --- survSplit ---
-  pt_data <- survival::survSplit(
+  pt <- survival::survSplit(
     data  = df,
-    cut   = cut_times,
+    cut   = args$cut_times,
     start = "tstart",
     end   = "tstop",
     event = "event_indicator"
   )
 
-  # --- Integer k under (0, t_1], ..., (t_{K_max-1}, T_max] ---
-  pt_data$k <- findInterval(pt_data$tstop, c(0, cut_times),
-                            left.open = TRUE)
+  pt$k <- findInterval(pt$tstop, c(0, args$cut_times), left.open = TRUE)
+  pt
+}
 
-  # --- Three-way exit-flag assembly ---
-  # event_indicator == 1 marks each subject's terminal row. For admin-
-  # truncated subjects, the terminal row is forced back to at-risk
-  # (all three flags 0). Otherwise the row splits by status + ipcw.
-  is_terminal <- pt_data$event_indicator == 1L &
-                 !pt_data$.admin_trunc_subject
-  is_event    <- is_terminal & pt_data$.status_subject == 1
-  is_dep      <- is_terminal & pt_data$.status_subject == 0 &
-                   pt_data$.ipcw_subject
-  is_indep    <- is_terminal & pt_data$.status_subject == 0 &
-                   !pt_data$.ipcw_subject
 
-  pt_data$y_event    <- as.integer(is_event)
-  pt_data$dep_cens   <- as.integer(is_dep)
-  pt_data$indep_cens <- as.integer(is_indep)
+#' Build the three-way exit flag triple (`y_event`, `dep_cens`, `indep_cens`)
+#'
+#' `event_indicator == 1` marks each subject's terminal row. For admin-
+#' truncated subjects the terminal row is forced back to at-risk (all
+#' three flags 0). Otherwise the row splits by `status` + `ipcw` per
+#' spec §3.0.4: `status = 1` -> `y_event`; `status = 0` & `ipcw = TRUE`
+#' -> `dep_cens`; `status = 0` & `ipcw = FALSE` -> `indep_cens`.
+#'
+#' @keywords internal
+.assemble_exit_flags <- function(pt, args) {
+  is_terminal <- pt$event_indicator == 1L & !pt$.admin_trunc_subject
+  is_event    <- is_terminal & pt$.status_subject == 1
+  is_dep      <- is_terminal & pt$.status_subject == 0 &  pt$.ipcw_subject
+  is_indep    <- is_terminal & pt$.status_subject == 0 & !pt$.ipcw_subject
 
-  # --- Drop survSplit scaffolding + original time/status ---
-  pt_data$tstart          <- NULL
-  pt_data$tstop           <- NULL
-  pt_data$event_indicator <- NULL
-  pt_data[[time]]         <- NULL
-  pt_data[[status]]       <- NULL
-  pt_data$.ipcw_subject        <- NULL
-  pt_data$.admin_trunc_subject <- NULL
-  pt_data$.status_subject      <- NULL
+  pt$y_event    <- as.integer(is_event)
+  pt$dep_cens   <- as.integer(is_dep)
+  pt$indep_cens <- as.integer(is_indep)
+  pt
+}
 
-  # --- Reorder columns ---
-  ordered_cols <- c(id, "k", treatment, covariates,
+
+#' Drop survSplit scaffolding + reorder to the canonical person-time layout
+#'
+#' Removes `tstart`, `tstop`, `event_indicator`, the original `time` and
+#' `status` columns, and the three broadcast `.*_subject` helpers used
+#' by [.assemble_exit_flags()]. Reorders the surviving columns to
+#' `(id, k, treatment, covariates..., y_event, dep_cens, indep_cens)`.
+#'
+#' @keywords internal
+.tidy_person_time_columns <- function(pt, args) {
+  pt$tstart                <- NULL
+  pt$tstop                 <- NULL
+  pt$event_indicator       <- NULL
+  pt[[args$time]]          <- NULL
+  pt[[args$status]]        <- NULL
+  pt$.ipcw_subject         <- NULL
+  pt$.admin_trunc_subject  <- NULL
+  pt$.status_subject       <- NULL
+
+  ordered_cols <- c(args$id, "k", args$treatment, args$covariates,
                     "y_event", "dep_cens", "indep_cens")
-  pt_data <- pt_data[, ordered_cols, drop = FALSE]
+  pt[, ordered_cols, drop = FALSE]
+}
 
-  # --- admin_reach diagnostic ---
-  n_subjects   <- length(unique(data[[id]]))
-  n_reach_kmax <- length(unique(pt_data[[id]][pt_data$k == K_max]))
-  admin_reach_frac <- n_reach_kmax / n_subjects
-  if (admin_reach_frac < 0.5) {
-    warning("mean(admin_reach) = ",
-            formatC(admin_reach_frac, digits = 3, format = "f"),
-            " (< 0.5): hazard at K_max from thin risk set; ",
-            "CIF at K_max unreliable.", call. = FALSE)
+
+#' Warn when most individuals are censored before event or end of follow-up
+#'
+#' Computes the fraction of subjects who either (a) reach `k = K_max`
+#' (with or without admin truncation) or (b) have an event
+#' (`y_event == 1`) at any `k`. The complement of this union is the
+#' fraction of subjects censored before reaching end of follow-up or
+#' having an event — those contributing only partial information at
+#' `k = K_max`. When the union covers less than 50% of subjects, the
+#' function emits a warning; fit proceeds either way.
+#'
+#' @keywords internal
+.check_admin_reach <- function(pt, args) {
+  n_subjects     <- length(unique(args$data[[args$id]]))
+  ids_at_kmax    <- unique(pt[[args$id]][pt$k == args$K_max])
+  ids_with_event <- unique(pt[[args$id]][pt$y_event == 1])
+  covered_frac   <- length(union(ids_at_kmax, ids_with_event)) / n_subjects
+
+  if (covered_frac < 0.5) {
+    warning(
+      "More than 50% of individuals are censored before reaching ",
+      "end of follow-up or having an event ",
+      "(covered fraction = ",
+      formatC(covered_frac, digits = 3, format = "f"), ").",
+      call. = FALSE
+    )
   }
+  invisible(NULL)
+}
 
-  # --- Attach metadata + class ---
-  attr(pt_data, "cut_times")        <- cut_times
-  attr(pt_data, "T_max")            <- T_max
-  attr(pt_data, "K_max")            <- K_max
-  attr(pt_data, "treatment_levels") <- trt$levels
-  attr(pt_data, "id_col")           <- id
-  attr(pt_data, "treatment_col")    <- treatment
-  attr(pt_data, "covariates")       <- covariates
-  class(pt_data) <- c("person_time", class(pt_data))
 
-  pt_data
+#' Stamp `person_time` metadata attributes and S3 class
+#'
+#' Attaches `cut_times`, `T_max`, `K_max`, `treatment_levels`, `id_col`,
+#' `treatment_col`, and `covariates` as attributes on `pt`, and prepends
+#' `"person_time"` to its S3 class vector so downstream code can dispatch
+#' on it via [inherits()].
+#'
+#' @keywords internal
+.stamp_person_time_class <- function(pt, args) {
+  attr(pt, "cut_times")        <- args$cut_times
+  attr(pt, "T_max")            <- args$T_max
+  attr(pt, "K_max")            <- args$K_max
+  attr(pt, "treatment_levels") <- args$trt$levels
+  attr(pt, "id_col")           <- args$id
+  attr(pt, "treatment_col")    <- args$treatment
+  attr(pt, "covariates")       <- args$covariates
+  class(pt) <- c("person_time", class(pt))
+  pt
 }

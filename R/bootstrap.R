@@ -22,6 +22,95 @@
 #'
 #' @export
 bootstrap <- function(fit, n_boot = 500, alpha = 0.05, seed = NULL) {
+
+  # 1. Validate / canonicalize args (incl. set.seed, the keep_data = TRUE
+  #    refit hint when fit$pt_data is NULL, and cross-checks that the
+  #    attached pt_data's cut grid + treatment encoding + treatment column
+  #    match the fit's — silent-failure paths if they don't).
+  args <- .validate_bootstrap_args(fit, n_boot, alpha, seed)
+
+  # 2. Set up the resampling state: split pt_data by subject id, cache
+  #    unique ids and the sample size n.
+  state <- .init_bootstrap_state(args$pt_data, args$id_col)
+
+  # 3. Replicate loop: report progress, resample subjects, refit fit$call
+  #    on the bootstrap sample, record per-replicate cumulative incidence
+  #    (or note the failure).
+  reps_long       <- list()
+  failed_reps     <- integer()
+  report_progress <- .make_bootstrap_progress_reporter(args$n_boot)
+  for (b in seq_len(args$n_boot)) {
+    report_progress(b)
+    boot_data <- .resample_pt_data(state, args$pt_data, args$id_col)
+    call_b <- args$fit$call
+    call_b$pt_data <- boot_data
+    res <- tryCatch(suppressWarnings(eval(call_b)),
+                    error = function(e) NULL)
+    if (is.null(res)) {
+      failed_reps <- c(failed_reps, b)
+      next
+    }
+    est <- res$cumulative_incidence[[args$method]]
+    reps_long[[length(reps_long) + 1L]] <- data.frame(
+      boot_id   = b,
+      treatment = est$treatment,
+      k         = est$k,
+      value     = est$inc,
+      stringsAsFactors = FALSE,
+      row.names = NULL
+    )
+  }
+
+  # 4. Aggregate per-replicate CIFs into the long-format replicates table.
+  replicates <- if (length(reps_long) == 0L) {
+    data.frame(boot_id = integer(), treatment = numeric(),
+               k = integer(), value = numeric(),
+               stringsAsFactors = FALSE)
+  } else do.call(rbind, reps_long)
+
+  # 5. Compute (alpha/2, 1 - alpha/2) percentile bands per (treatment, k).
+  bands <- .percentile_bands(replicates, args$alpha)
+
+  # 6. Assemble S3 output.
+  structure(
+    list(
+      fit_call         = args$fit$call,
+      n_boot_requested = as.integer(args$n_boot),
+      n_boot_effective = as.integer(args$n_boot - length(failed_reps)),
+      alpha            = args$alpha,
+      replicates       = replicates,
+      ci_lower         = bands$ci_lower,
+      ci_upper         = bands$ci_upper,
+      failed_reps      = failed_reps,
+      warnings_count   = NA_integer_
+    ),
+    class = "causal_survival_bootstrap"
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# Internal helpers for bootstrap(): validation, state init, progress
+# reporter, resampling, percentile bands. Plumbing lives here so the public
+# API body stays a 6-tile pipeline.
+# ----------------------------------------------------------------------------
+
+#' Validate and canonicalize `bootstrap()` arguments
+#'
+#' Checks `fit` class, the integer-positivity of `n_boot`, the
+#' `(0, 1)` range of `alpha`, sets the RNG seed when supplied, and
+#' verifies `fit$pt_data` is present (refit with `keep_data = TRUE`,
+#' or attach manually via `to_person_time()` — the error message gives
+#' a copy-pasteable reconstruction snippet). Also cross-checks that
+#' the attached `pt_data`'s cut grid, `treatment_levels`, and
+#' `treatment_col` match the corresponding fields on `fit` — three
+#' silent-failure paths (wrong replicate alignment, swapped arms,
+#' wrong column dispatched) that aren't caught by R's normal errors.
+#' Returns a canonical args list with `fit`, `n_boot`, `alpha`,
+#' `pt_data`, `id_col`, and `method`.
+#'
+#' @keywords internal
+.validate_bootstrap_args <- function(fit, n_boot, alpha, seed) {
   stopifnot(inherits(fit, "causal_survival_fit"))
   if (!is.numeric(n_boot) || length(n_boot) != 1L ||
       n_boot < 1 || n_boot != round(n_boot)) {
@@ -33,28 +122,117 @@ bootstrap <- function(fit, n_boot = 500, alpha = 0.05, seed = NULL) {
   }
   if (!is.null(seed)) set.seed(seed)
 
-  pt_data <- fit$pt_data
-  if (is.null(pt_data)) {
-    stop("`fit$pt_data` is NULL; refit `causal_survival(..., keep_data = TRUE)`.",
-         call. = FALSE)
+  if (is.null(fit$pt_data)) {
+    stop(
+      "`fit$pt_data` is NULL. Either refit with\n",
+      "  causal_survival(..., keep_data = TRUE)\n",
+      "or attach the person-time data manually before bootstrapping:\n",
+      "  fit$pt_data <- to_person_time(\n",
+      "      data,\n",
+      "      id         = fit$id_col,\n",
+      "      treatment  = fit$treatment_col,\n",
+      "      covariates = fit$covariates,\n",
+      "      cut_points = fit$cut_times[-length(fit$cut_times)],\n",
+      "      T_max      = max(fit$cut_times),\n",
+      "      ...)\n",
+      "(time, status, ipcw must match the original subject-level data).",
+      call. = FALSE
+    )
   }
-  id_col  <- fit$id_col
-  method  <- fit$method
 
+  # Cross-check: attached pt_data must use the same cut grid, treatment
+  # encoding, and treatment column the fit was built on. Otherwise the
+  # bootstrap silently produces wrong-grid replicates, swapped-arm
+  # contrasts, or wrong-column propensity / outcome fits.
+  pt_cuts <- attr(fit$pt_data, "cut_times")
+  if (is.null(pt_cuts) || !isTRUE(all.equal(pt_cuts, fit$cut_times))) {
+    stop(
+      "`fit$pt_data` cut grid does not match `fit$cut_times`. ",
+      "The attached pt_data was built on a different cut spec. Rebuild:\n",
+      "  fit$pt_data <- to_person_time(data, ...,\n",
+      "      cut_points = fit$cut_times[-length(fit$cut_times)],\n",
+      "      T_max      = max(fit$cut_times))",
+      call. = FALSE
+    )
+  }
+  pt_levels <- attr(fit$pt_data, "treatment_levels")
+  if (is.null(pt_levels) || !identical(pt_levels, fit$treatment_levels)) {
+    stop(
+      "`fit$pt_data` treatment_levels do not match the fit's ",
+      "treatment_levels (fit: ",
+      paste(fit$treatment_levels, collapse = " / "),
+      "; attached: ",
+      paste(pt_levels %||% "<missing>", collapse = " / "), "). ",
+      "The attached pt_data uses a different encoding (e.g., factor ",
+      "levels swapped). Verify `data[[fit$treatment_col]]` matches the ",
+      "original values / factor level ordering, then rebuild:\n",
+      "  fit$pt_data <- to_person_time(data, ...,\n",
+      "      treatment  = fit$treatment_col,\n",
+      "      cut_points = fit$cut_times[-length(fit$cut_times)],\n",
+      "      T_max      = max(fit$cut_times))",
+      call. = FALSE
+    )
+  }
+  pt_treatment_col <- attr(fit$pt_data, "treatment_col")
+  if (is.null(pt_treatment_col) ||
+      !identical(pt_treatment_col, fit$treatment_col)) {
+    stop(
+      "`fit$pt_data` treatment_col (",
+      pt_treatment_col %||% "<missing>",
+      ") does not match `fit$treatment_col` (", fit$treatment_col, "). ",
+      "Rebuild pt_data with `treatment = fit$treatment_col`.",
+      call. = FALSE
+    )
+  }
+
+  list(
+    fit     = fit,
+    n_boot  = n_boot,
+    alpha   = alpha,
+    pt_data = fit$pt_data,
+    id_col  = fit$id_col,
+    method  = fit$method
+  )
+}
+
+
+#' Set up the bootstrap resampling state
+#'
+#' Splits `pt_data` into a per-subject list (`pt_by_id`) keyed by
+#' subject id, returns the vector of unique ids and the sample size
+#' `n` (used by `sample()` for each replicate). Pre-computing this
+#' outside the loop avoids repeated `split()` calls.
+#'
+#' @keywords internal
+.init_bootstrap_state <- function(pt_data, id_col) {
   unique_ids <- unique(pt_data[[id_col]])
-  pt_by_id   <- split(pt_data, pt_data[[id_col]])
-  n          <- length(unique_ids)
+  list(
+    unique_ids = unique_ids,
+    pt_by_id   = split(pt_data, pt_data[[id_col]]),
+    n          = length(unique_ids)
+  )
+}
 
-  reps_long   <- list()
-  failed_reps <- integer()
 
-  tic                <- proc.time()[["elapsed"]]
+#' Build a stateful bootstrap progress reporter
+#'
+#' Returns a closure that, when called with the current replicate
+#' index `b`, emits the cadenced progress messages (first replicate
+#' announce, every 10 of the first 50, a one-shot ETA at `b = 50`
+#' when `n_boot > 50`, then every 100 thereafter). The `tic` clock
+#' and the "estimate already announced" latch live inside the closure
+#' so the public [bootstrap()] body doesn't need to manage them.
+#'
+#' @keywords internal
+.make_bootstrap_progress_reporter <- function(n_boot) {
+  tic <- proc.time()[["elapsed"]]
   estimate_announced <- FALSE
-
-  for (b in seq_len(n_boot)) {
-    # Progress messages — ported from separable_effects/R/bootstrap.R
-    # lines 109-136. First 50 replicates: every 10. After 50: emit a
-    # time estimate once, then every 100.
+  fmt_duration <- function(sec) {
+    m <- as.integer(floor(sec / 60))
+    s <- as.integer(round(sec - 60 * m))
+    if (m > 0) sprintf("%d min %02d sec", m, s) else sprintf("%d sec", s)
+  }
+  function(b) {
     if (b == 1 || (b <= 50 && b %% 10 == 0)) {
       message("Bootstrap replicate ", b, "/", n_boot)
     }
@@ -62,97 +240,83 @@ bootstrap <- function(fit, n_boot = 500, alpha = 0.05, seed = NULL) {
       elapsed   <- proc.time()[["elapsed"]] - tic
       per_rep   <- elapsed / 50
       remaining <- (n_boot - 50) * per_rep
-      fmt_duration <- function(sec) {
-        m <- as.integer(floor(sec / 60))
-        s <- as.integer(round(sec - 60 * m))
-        if (m > 0) sprintf("%d min %02d sec", m, s) else sprintf("%d sec", s)
-      }
       message(sprintf(
         "Bootstrap: 50 replicates done in %s. Estimated remaining: %s (%d more replicates).",
         fmt_duration(elapsed), fmt_duration(remaining), n_boot - 50
       ))
-      estimate_announced <- TRUE
+      estimate_announced <<- TRUE
     }
     if (b > 50 && b %% 100 == 0) {
       message("Bootstrap replicate ", b, "/", n_boot)
     }
-
-    sampled <- sample(unique_ids, size = n, replace = TRUE)
-    boot_data <- do.call(rbind, lapply(seq_along(sampled), function(i) {
-      rows <- pt_by_id[[as.character(sampled[i])]]
-      rows[[id_col]] <- paste0(sampled[i], "_", i)
-      rows
-    }))
-    # Preserve class + attributes lost by rbind
-    class(boot_data) <- class(pt_data)
-    for (a in names(attributes(pt_data))) {
-      if (a %in% c("names", "row.names", "class")) next
-      attr(boot_data, a) <- attr(pt_data, a)
-    }
-
-    call_b          <- fit$call
-    call_b$pt_data  <- boot_data
-    res <- tryCatch(suppressWarnings(eval(call_b)),
-                    error = function(e) NULL)
-    if (is.null(res)) {
-      failed_reps <- c(failed_reps, b)
-      next
-    }
-    est <- res$cumulative_incidence[[method]]
-    reps_long[[length(reps_long) + 1L]] <- data.frame(
-      boot_id   = b,
-      treatment = est$treatment,
-      k         = est$k,
-      value     = est$inc,
-      stringsAsFactors = FALSE,
-      row.names = NULL
-    )
   }
-  replicates <- if (length(reps_long) == 0L) {
-    data.frame(boot_id = integer(), treatment = numeric(),
-               k = integer(), value = numeric(),
-               stringsAsFactors = FALSE)
-  } else do.call(rbind, reps_long)
+}
 
-  # Percentile bands per (treatment, k)
+
+#' Draw a single bootstrap sample of person-time rows
+#'
+#' Samples `n` unique subject ids with replacement, rebuilds the
+#' corresponding person-time rows with synthetic ids (so refit code
+#' sees independent subjects even after duplicate sampling), and
+#' restores the `person_time` class and attributes that `rbind` would
+#' otherwise drop.
+#'
+#' @keywords internal
+.resample_pt_data <- function(state, pt_data, id_col) {
+  sampled <- sample(state$unique_ids, size = state$n, replace = TRUE)
+  boot_data <- do.call(rbind, lapply(seq_along(sampled), function(i) {
+    rows <- state$pt_by_id[[as.character(sampled[i])]]
+    rows[[id_col]] <- paste0(sampled[i], "_", i)
+    rows
+  }))
+  # Preserve class + attributes lost by rbind
+  class(boot_data) <- class(pt_data)
+  for (a in names(attributes(pt_data))) {
+    if (a %in% c("names", "row.names", "class")) next
+    attr(boot_data, a) <- attr(pt_data, a)
+  }
+  boot_data
+}
+
+
+#' Compute per-(treatment, k) percentile bands from the replicates table
+#'
+#' Aggregates the long-format `replicates` data.frame (one row per
+#' `(boot_id, treatment, k)`) into the `(alpha/2, 1 - alpha/2)`
+#' percentile bands per `(treatment, k)`. Returns a list with two
+#' data.frames matching the canonical bootstrap output shape:
+#' `ci_lower` (columns `treatment`, `k`, `lower`) and `ci_upper`
+#' (columns `treatment`, `k`, `upper`).
+#'
+#' The two quantiles are computed in separate `aggregate()` calls
+#' because the single-call variant returns a column whose shape
+#' depends on `simplify` and fails subscripting when the per-group
+#' result collapses to a scalar (e.g., constant replicates).
+#'
+#' @keywords internal
+.percentile_bands <- function(replicates, alpha) {
+  if (nrow(replicates) == 0L) {
+    return(list(
+      ci_lower = data.frame(treatment = numeric(), k = integer(),
+                            lower = numeric()),
+      ci_upper = data.frame(treatment = numeric(), k = integer(),
+                            upper = numeric())
+    ))
+  }
   q_lower <- alpha / 2
   q_upper <- 1 - alpha / 2
-  if (nrow(replicates) > 0L) {
-    # Compute the two quantiles in separate aggregate calls — the
-    # single-call variant returns a column whose shape depends on
-    # `simplify` and fails subscripting when the FUN result collapses
-    # to a scalar (e.g., constant replicates).
-    lo_agg <- stats::aggregate(
-      value ~ treatment + k, data = replicates,
-      FUN = function(v) unname(stats::quantile(v, probs = q_lower, na.rm = TRUE))
-    )
-    up_agg <- stats::aggregate(
-      value ~ treatment + k, data = replicates,
-      FUN = function(v) unname(stats::quantile(v, probs = q_upper, na.rm = TRUE))
-    )
-    ci_lower <- data.frame(treatment = lo_agg$treatment, k = lo_agg$k,
-                           lower = lo_agg$value)
-    ci_upper <- data.frame(treatment = up_agg$treatment, k = up_agg$k,
-                           upper = up_agg$value)
-  } else {
-    ci_lower <- data.frame(treatment = numeric(), k = integer(),
-                           lower = numeric())
-    ci_upper <- data.frame(treatment = numeric(), k = integer(),
-                           upper = numeric())
-  }
-
-  structure(
-    list(
-      fit_call         = fit$call,
-      n_boot_requested = as.integer(n_boot),
-      n_boot_effective = as.integer(n_boot - length(failed_reps)),
-      alpha            = alpha,
-      replicates       = replicates,
-      ci_lower         = ci_lower,
-      ci_upper         = ci_upper,
-      failed_reps      = failed_reps,
-      warnings_count   = NA_integer_
-    ),
-    class = "causal_survival_bootstrap"
+  lo_agg <- stats::aggregate(
+    value ~ treatment + k, data = replicates,
+    FUN = function(v) unname(stats::quantile(v, probs = q_lower, na.rm = TRUE))
+  )
+  up_agg <- stats::aggregate(
+    value ~ treatment + k, data = replicates,
+    FUN = function(v) unname(stats::quantile(v, probs = q_upper, na.rm = TRUE))
+  )
+  list(
+    ci_lower = data.frame(treatment = lo_agg$treatment, k = lo_agg$k,
+                          lower = lo_agg$value),
+    ci_upper = data.frame(treatment = up_agg$treatment, k = up_agg$k,
+                          upper = up_agg$value)
   )
 }

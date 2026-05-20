@@ -392,6 +392,50 @@ documentation sweep).
       `print()`, `plot()` smoke tests
 - [ ] `test-bootstrap.R` (Phase 3) — resampling, percentile CI
 
+## Plot UX docs — `cut_times` argument and step-vs-smooth survival
+
+- [ ] Vignette FAQ: "Why is the IPW-MSM survival curve stepped when
+  the hazard model is parametric in `k`?" Short answer to embed:
+  - The MSM's `y_event ~ A + k + I(k^2) + I(k^3)` is a parametric
+    *working model for the hazard*, used internally so the hazard
+    has fewer parameters than a fully saturated `factor(k)` MSM
+    (matters when `K_max` is large).
+  - The *estimand* is `E[Y_k^{a, c=0}]` on the discrete grid
+    `k = 1..K_max` per the `(k-1, k]` convention. It is not defined
+    between cut times — the at-risk set and event-counting rule are
+    interval-based.
+  - Reading the hazard at fractional `k` (e.g., 1.5) would be an
+    extrapolation/interpolation choice that was *not* part of the
+    identification argument. The IPW weights were built to identify
+    the discrete-grid value.
+  - Visual consistency: the g-formula and IPW-KM estimators are
+    genuinely step functions; drawing the MSM smoothly would
+    misleadingly imply it estimates a different kind of quantity.
+  - Reference: Hernán & Robins ch. 17, discrete-time MSMs are
+    conventionally reported on the analysis grid.
+  - **TL;DR**: smooth hazard (internal modeling choice), stepped
+    survival (output lives on the cut grid).
+- [ ] (v0.2 idea) Optional `plot(..., smooth = TRUE)` arg for the MSM
+  path only that evaluates the hazard at a fine subgrid and draws a
+  continuous curve, with an explicit caveat about extrapolation.
+  Off by default.
+
+- [ ] Vignette section explaining `plot(..., cut_times = ...)`:
+  - `NULL` (default): show baseline `t = 0` plus every fit cut time.
+  - Single positive integer `N`: COUNT mode — show baseline plus `N`
+    indices equidistant along `fit$cut_times`.
+  - Numeric vector (length >= 2): EXPLICIT SUBSET — values must be in
+    `c(0, fit$cut_times)`; `0` is auto-prepended if absent so the
+    baseline column is always shown.
+  - **Gotcha**: a length-1 numeric is interpreted as a count, not a
+    subset. To display a single specific cut time, pair it with `0`,
+    e.g. `cut_times = c(0, 5)`. Worth a worked example in the
+    vignette since this is the only non-obvious user-facing wrinkle.
+- [ ] Optional: add a `risk_table_max_labels` knob that caps label
+  density when `cut_points` is large (15+) and uses the same
+  equidistant-pick rule as count mode under the hood. Currently the
+  user has to pass `cut_times = N` explicitly to thin the labels.
+
 ## Lineage note
 
 CCR's `dev/TODO.md` §"Future: shared causal_tools" anticipated factoring

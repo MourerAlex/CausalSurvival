@@ -79,69 +79,307 @@ print.causal_survival_fit <- function(x, ...) {
 #'   selected time.
 #' @export
 summary.causal_survival_fit <- function(object, ci = NULL,
-                                        time = NULL, ...) {
+                                        time = NULL,
+                                        scale = c("incidence", "survival"),
+                                        ...) {
   if (!is.null(ci)) {
     stopifnot(inherits(ci, "causal_survival_bootstrap"))
   }
-  t_at <- snap_time(time, object$cut_times)
-  k_at <- which(object$cut_times == t_at)
+  scale <- match.arg(scale)
+  if (is.null(object$pt_data)) {
+    stop("summary() requires fit$pt_data. Refit with `keep_data = TRUE`.",
+         call. = FALSE)
+  }
+  t_at  <- snap_time(time, object$cut_times)
+  k_at  <- which(object$cut_times == t_at)
 
-  cat("Counterfactual survival - summary\n")
-  cat("=================================\n\n")
-  estimator_str <- if (object$method == "ipw")
-    paste0(" (estimator: ", object$ipw_estimator, ")") else ""
-  cat("Method: ", object$method, estimator_str,
-      " | N: ", length(unique(object$pt_data[[object$id_col]])),
-      "\n", sep = "")
-  cat("Cut times: ", length(object$cut_times),
-      " (T_max = ", max(object$cut_times), ")\n\n", sep = "")
+  # Cohort context (baseline N per arm, cut-grid stats, estimator label)
+  trt_col    <- object$treatment_col
+  id_col     <- object$id_col
+  pt         <- object$pt_data
+  arm_levels <- sort(unique(pt[[trt_col]]))
+  n_per_arm  <- vapply(arm_levels, function(a) length(unique(
+    pt[[id_col]][as.character(pt[[trt_col]]) == as.character(a)])),
+    integer(1))
+  K_max   <- length(object$cut_times)
+  T_max   <- max(object$cut_times)
+  est_str <- if (object$method == "ipw")
+    paste0("ipw (", object$ipw_estimator, ")") else object$method
 
+  # 1. Banner
+  .render_summary_banner()
+
+  # 2. Method / cohort info box
+  .render_summary_info_box(est_str, sum(n_per_arm), K_max, T_max)
+
+  # 3. Baseline section (N per arm + visual bars at t = 0)
+  .render_summary_baseline(arm_levels, n_per_arm)
+
+  # 4. Counterfactual risk at the snapped time (F^a and S^a side by side)
   est <- object$cumulative_incidence[[object$method]]
   row <- est[est$k == k_at, , drop = FALSE]
-  cat(sprintf("Cumulative incidence at k = %d (t = %g):\n", k_at, t_at))
-  for (i in seq_len(nrow(row))) {
-    cat(sprintf("  a = %s : F^a = %.4f\n",
-                format(row$treatment[i]), row$inc[i]))
-  }
+  .render_summary_risk(row, t_at)
 
-  # Contrast block (only when bootstrap attached)
+  # 5. Contrasts (only when bootstrap attached) — table + proportional bar
   if (!is.null(ci)) {
-    ctr <- causal_contrast(object, ci = ci, time = t_at)$contrasts
+    ctr <- causal_contrast(object, ci = ci, time = t_at,
+                           scale = scale)$contrasts
+    .render_summary_contrasts(ctr, t_at, ci, scale)
+  }
+
+  # 6. Footer pointers + model-checks tally
+  .render_summary_footer(ci)
+  .render_summary_model_checks(object$model_checks)
+
+  invisible(row)
+}
+
+
+# ----------------------------------------------------------------------------
+# Internal helpers for summary.causal_survival_fit(): tile-by-tile renderers
+# for the box-drawn console layout (banner, info box, baseline bars, risk
+# table, contrasts + proportional CI bar, footer, model-checks tally).
+# ----------------------------------------------------------------------------
+
+#' Render the top banner of `summary.causal_survival_fit()`
+#' @keywords internal
+.render_summary_banner <- function() {
+  cat("\n")
+  # ASCII-only banner: every char is exactly 1 column wide in any
+  # monospace font, so the right edge always aligns with the border.
+  title    <- "COUNTERFACTUAL SURVIVAL - SUMMARY"
+  inner_w  <- 70L
+  side_pad <- (inner_w - nchar(title)) %/% 2L
+  middle   <- paste0(strrep(" ", side_pad), title,
+                     strrep(" ", inner_w - side_pad - nchar(title)))
+  bar      <- strrep("=", inner_w)
+  cat("+", bar, "+\n", sep = "")
+  cat("|", middle, "|\n", sep = "")
+  cat("+", bar, "+\n\n", sep = "")
+}
+
+#' Render the method / cohort info box
+#' @keywords internal
+.render_summary_info_box <- function(est_str, N, K_max, T_max) {
+  method_line <- sprintf("Method: %s", est_str)
+  stats_line  <- sprintf("N = %d  |  K = %d  |  T_max = %g",
+                         N, K_max, T_max)
+  # ASCII-only box (every char exactly 1 col wide). Inner width =
+  # longest content line + 2 spaces of breathing room each side so the
+  # right edge closes flush just past "T_max = 10".
+  content_w <- max(nchar(method_line), nchar(stats_line))
+  inner_w   <- content_w + 4L
+  pad_to    <- function(s) paste0(s, strrep(" ", content_w - nchar(s)))
+  indent    <- strrep(" ", 11L)
+  bar       <- strrep("-", inner_w)
+  cat(indent, "+", bar, "+\n", sep = "")
+  cat(indent, "|  ", pad_to(method_line), "  |\n", sep = "")
+  cat(indent, "|  ", pad_to(stats_line),  "  |\n", sep = "")
+  cat(indent, "+", bar, "+\n\n", sep = "")
+}
+
+#' Render the baseline (t = 0) section with N per arm and bar visuals
+#' @keywords internal
+.render_summary_baseline <- function(arm_levels, n_per_arm) {
+  cat("  ", strrep("-", 66), "\n", sep = "")
+  cat("  BASELINE   at t = 0\n")
+  cat("  ", strrep("-", 66), "\n\n", sep = "")
+  bar_max <- 20L
+  for (i in seq_along(arm_levels)) {
+    bar_len <- max(1L, round(n_per_arm[i] / max(n_per_arm) * bar_max))
+    cat(sprintf("      arm %s  %s%s   N = %3d\n",
+                format(arm_levels[i]),
+                strrep("#", bar_len),
+                strrep(" ", bar_max - bar_len),
+                n_per_arm[i]))
+  }
+  cat("\n")
+}
+
+#' Render the counterfactual risk table (F^a and S^a side by side)
+#' @keywords internal
+.render_summary_risk <- function(row, t_at) {
+  cat("  ", strrep("-", 66), "\n", sep = "")
+  cat(sprintf("  COUNTERFACTUAL RISK   at t = %g\n", t_at))
+  cat("  ", strrep("-", 66), "\n\n", sep = "")
+  cat("      arm     F^a(t)    S^a(t)\n")
+  for (i in seq_len(nrow(row))) {
+    cat(sprintf("       %s      %.3f     %.3f\n",
+                format(row$treatment[i]), row$inc[i], row$surv[i]))
+  }
+  cat("\n")
+}
+
+#' Render the contrasts section: per-row table + proportional CI bar
+#'
+#' Each contrast row prints: a header line with `RD/RR`, formula on the
+#' chosen scale, and the null reference; an estimate-and-CI line; then a
+#' proportional bar where `[` and `]` mark the CI endpoints, `|` marks
+#' the null, `*` marks the point estimate (`<>` when null = estimate).
+#' The bar's display range spans `[min(lower, null), max(upper, null)]`,
+#' so the null is always visible even when it falls outside the CI.
+#'
+#' @keywords internal
+.render_summary_contrasts <- function(ctr, t_at, ci, scale) {
+  scale_label <- if (scale == "incidence")
+    "cumulative incidence F^a" else "survival S^a"
+  cat("  ", strrep("-", 66), "\n", sep = "")
+  cat(sprintf("  CONTRASTS on %s (t = %g)\n", scale_label, t_at))
+  cat(sprintf("  (%.0f%% CIs from %d bootstrap replicates)\n",
+              (1 - ci$alpha) * 100, ci$n_boot_effective))
+  cat("  ", strrep("-", 66), "\n\n", sep = "")
+
+  formula_for <- function(contrast_type, scale) {
+    base <- if (scale == "incidence") "F" else "S"
+    sym  <- if (contrast_type == "difference") "-" else "/"
+    sprintf("%s^1 %s %s^0", base, sym, base)
+  }
+
+  any_includes_null <- FALSE
+  for (i in seq_len(nrow(ctr))) {
+    r <- ctr[i, ]
+    null_val      <- if (r$contrast == "difference") 0 else 1
+    includes_null <- r$lower <= null_val && null_val <= r$upper
+    if (includes_null) any_includes_null <- TRUE
+    label         <- if (r$contrast == "difference") "RD" else "RR"
+
+    cat(sprintf("      %s   formula: %-12s   null = %g\n",
+                label, formula_for(r$contrast, scale), null_val))
+    cat(sprintf("           estimate = %7.3f   CI [%7.3f, %7.3f]\n",
+                r$estimate, r$lower, r$upper))
+
+    bar_str <- .build_contrast_bar(r$lower, r$upper, r$estimate, null_val,
+                                   contrast = r$contrast)
+    cat("           ", bar_str, "\n", sep = "")
+
+    annot <- if (includes_null) {
+      sprintf("null = %g in CI  -> CI does not exclude null *", null_val)
+    } else if (null_val < r$lower) {
+      sprintf("null = %g < CI   -> CI excludes null at alpha", null_val)
+    } else {
+      sprintf("null = %g > CI   -> CI excludes null at alpha", null_val)
+    }
+    cat("           ", strrep(" ", 30L), annot, "\n\n", sep = "")
+  }
+
+  if (any_includes_null) {
+    cat("      * inconclusive at the chosen alpha level\n",
+        "        (conditional on identifying assumptions -",
+        " see causal_assumptions(fit))\n\n", sep = "")
+  }
+}
+
+#' Build a single proportional contrast bar
+#'
+#' Returns a string of the form `"<lo>   [....|.*....]   <hi>"` where:
+#' `[` / `]` are the CI bounds, `|` is the null reference, `*` is the
+#' point estimate, and `-` is filler. When `null = estimate` the marker
+#' becomes `X`. Bar width fixed at 14 chars; display range spans
+#' `[min(lower, null), max(upper, null)]` so the null is always shown.
+#'
+#' For `contrast = "ratio"` the bar geometry uses `log(value)` so that
+#' RR = 0.5 and RR = 2.0 are equidistant from the null = 1 (forest-plot
+#' convention since Cochrane). Printed endpoint labels stay on the
+#' linear scale so the displayed numbers remain interpretable.
+#'
+#' Edge guards: non-finite bounds, non-positive values for ratios, and
+#' broken ordering (`lower > estimate` or `estimate > upper` from
+#' bootstrap pathologies) bail out to a numbers-only string.
+#'
+#' @keywords internal
+.build_contrast_bar <- function(lower, upper, estimate, null_val,
+                                contrast, width = 14L) {
+
+  # Edge guards: non-finite values or broken ordering.
+  if (!all(is.finite(c(lower, upper, estimate, null_val))) ||
+      lower > estimate || estimate > upper) {
+    return(sprintf("%7.3f   (non-finite or ill-ordered)   %7.3f",
+                   lower, upper))
+  }
+
+  # Ratio contrasts: position markers on log scale so symmetric
+  # multiplicative effects map symmetrically across the null.
+  if (contrast == "ratio") {
+    if (lower <= 0 || estimate <= 0 || upper <= 0 || null_val <= 0) {
+      return(sprintf("%7.3f   (non-positive ratio)   %7.3f",
+                     lower, upper))
+    }
+    geom_lower <- log(lower)
+    geom_upper <- log(upper)
+    geom_est   <- log(estimate)
+    geom_null  <- log(null_val)
+  } else {
+    geom_lower <- lower
+    geom_upper <- upper
+    geom_est   <- estimate
+    geom_null  <- null_val
+  }
+
+  display_lo <- min(geom_lower, geom_null)
+  display_hi <- max(geom_upper, geom_null)
+  span       <- display_hi - display_lo
+  if (span <= 0) {
+    return(sprintf("%7.3f   (point CI = null)   %7.3f", lower, upper))
+  }
+
+  pos <- function(v) {
+    max(1L, min(width,
+                round((v - display_lo) / span * (width - 1L)) + 1L))
+  }
+  i_lo   <- pos(geom_lower)
+  i_hi   <- pos(geom_upper)
+  i_null <- pos(geom_null)
+  i_est  <- pos(geom_est)
+
+  bar <- rep("-", width)
+  bar[i_lo] <- "["
+  bar[i_hi] <- "]"
+  if (i_null != i_lo && i_null != i_hi) {
+    bar[i_null] <- "|"
+  }
+  if (i_est != i_lo && i_est != i_hi) {
+    bar[i_est] <- if (i_est == i_null) "X" else "*"
+  }
+
+  # Endpoint labels: keep linear-scale values so printed numbers stay
+  # interpretable as the original quantities (especially RR).
+  end_lo <- min(lower, null_val)
+  end_hi <- max(upper, null_val)
+  sprintf("%7.3f   %s   %7.3f",
+          end_lo, paste(bar, collapse = ""), end_hi)
+}
+
+#' Render the footer block (identification + bootstrap pointers)
+#' @keywords internal
+.render_summary_footer <- function(ci) {
+  cat("  ", strrep("-", 66), "\n", sep = "")
+  cat("           identification -> causal_assumptions(fit)\n")
+  if (!is.null(ci)) {
     cat(sprintf(
-      "\nContrasts at k = %d (%.0f%% CIs):\n", k_at, (1 - ci$alpha) * 100
-    ))
-    for (i in seq_len(nrow(ctr))) {
-      r <- ctr[i, ]
-      label <- if (r$op == "-") "RD" else "RR"
-      cat(sprintf(
-        "  %s  %s = %6.3f  [%6.3f, %6.3f]\n",
-        r$name, label, r$estimate, r$lower, r$upper
-      ))
-    }
-  }
-
-  # Model-check tally
-  if (!is.null(object$model_checks)) {
-    non_converged <- 0L
-    for (chk in object$model_checks) {
-      if (is.null(chk)) next
-      if (!isTRUE(chk$converged)) non_converged <- non_converged + 1L
-    }
-    if (non_converged > 0L) {
-      cat(sprintf(
-        "\nModel checks: %d non-converged model(s). See `fit$model_checks`.\n",
-        non_converged
-      ))
-    }
-  }
-
-  # Pointers
-  cat("\nIdentification block: causal_assumptions(fit).\n")
-  if (is.null(ci)) {
-    cat("For contrasts with CIs: boot <- bootstrap(fit, n_boot = 500); ",
+      "           bootstrap detail -> fit$ci, %d replicates @ %.0f%%\n",
+      ci$n_boot_effective, (1 - ci$alpha) * 100))
+  } else {
+    cat("           for CIs: boot <- bootstrap(fit, n_boot = 500); ",
         "summary(fit, ci = boot)\n", sep = "")
   }
-  invisible(row)
+  cat("  ", strrep("-", 66), "\n")
+}
+
+#' Render the model-checks tally (warns on non-converged models)
+#' @keywords internal
+.render_summary_model_checks <- function(model_checks) {
+  if (is.null(model_checks)) return(invisible())
+  non_converged <- 0L
+  for (chk in model_checks) {
+    if (is.null(chk)) next
+    if (!isTRUE(chk$converged)) non_converged <- non_converged + 1L
+  }
+  if (non_converged > 0L) {
+    cat(sprintf(
+      "\n  ! Model checks: %d non-converged model(s). See `fit$model_checks`.\n",
+      non_converged))
+  }
+  invisible()
 }
 
 
@@ -199,7 +437,9 @@ print.causal_survival_risk <- function(x, ...) {
 print.causal_survival_contrast <- function(x, ...) {
   cat("Counterfactual contrasts (causal_survival_contrast)\n")
   cat("---------------------------------------------------\n")
-  cat("Method: ", x$method, "\n", sep = "")
+  scale_label <- if (x$scale == "incidence")
+    "cumulative incidence F^a" else "survival S^a"
+  cat("Method: ", x$method, "  |  Scale: ", scale_label, "\n", sep = "")
   if (!is.null(x$alpha)) {
     cat(sprintf("Significance level: %g (%.0f%% CIs)\n\n",
                 x$alpha, (1 - x$alpha) * 100))
@@ -208,9 +448,24 @@ print.causal_survival_contrast <- function(x, ...) {
   }
 
   cat(sprintf("At t = %g:\n", x$time))
-  out <- x$contrasts[, c("name", "op", "estimate", "lower", "upper"),
+  out <- x$contrasts[, c("name", "contrast", "estimate", "lower", "upper"),
                      drop = FALSE]
+  # Reference value under the null of no causal effect:
+  #   difference -> 0
+  #   ratio      -> 1
+  out$null_value <- ifelse(out$contrast == "difference", 0, 1)
+  out <- out[, c("name", "contrast", "null_value",
+                 "estimate", "lower", "upper"),
+             drop = FALSE]
   print(out, row.names = FALSE)
+  cat("\nReading: if the [lower, upper] interval includes the ",
+      "`null_value` (0 for difference, 1 for ratio), the CI does not ",
+      "exclude the null at the chosen alpha level (inconclusive). ",
+      "If the interval excludes the `null_value`, the CI excludes the ",
+      "null at the chosen alpha level. Both conclusions are ",
+      "conditional on identifying assumptions - ",
+      "see causal_assumptions(fit).\n",
+      sep = "")
   invisible(x)
 }
 

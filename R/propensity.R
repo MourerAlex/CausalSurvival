@@ -45,9 +45,13 @@ NULL
 fit_propensity <- function(pt_data, treatment, covariates,
                             stabilize = TRUE,
                             formula_full = NULL, formula_num = NULL) {
+
+  # 1. Baseline subset: one row per subject at k = 1, the time point
+  #    where treatment is assigned under the v1 point-treatment scope.
   baseline <- pt_data[pt_data$k == 1, ]
 
-  # Full conditioning: A ~ L
+  # 2. Fit the full conditioning denominator model `A ~ L_1 + ... + L_p`
+  #    (or `A ~ 1` when covariates is empty / user-overridden formula).
   if (is.null(formula_full)) {
     rhs <- if (length(covariates) > 0) {
       paste(covariates, collapse = " + ")
@@ -58,7 +62,8 @@ fit_propensity <- function(pt_data, treatment, covariates,
   }
   full <- fit_logistic(formula_full, baseline, "Propensity (full)")
 
-  # Numerator for stabilization: marginal by default, optionally conditional
+  # 3. Optional numerator for stabilization (marginal `A ~ 1` by default;
+  #    Robins/Hernán form). Skipped when stabilize = FALSE.
   num <- NULL
   if (stabilize) {
     if (is.null(formula_num)) {

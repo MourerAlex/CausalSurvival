@@ -62,6 +62,66 @@
 #' @export
 causal_contrast <- function(fit, reference = NULL, contrasts = NULL,
                             ci = NULL, time = NULL) {
+
+  # 1. Validate / canonicalize args. (See .validate_causal_contrast_args()
+  #    below — includes the loud `ci = NULL` warning, the v0.1.0
+  #    contrasts-must-be-NULL guard, the binary-treatment check, and the
+  #    reference-arm default.)
+  args <- .validate_causal_contrast_args(fit, reference, contrasts, ci)
+
+  # 2. Build the binary arm-pair × operator list. Under v0.1.0 there is
+  #    a single comparison: comparator vs reference, on both "-" (risk
+  #    difference) and "/" (risk ratio).
+  comparator <- setdiff(args$levels_vec, args$reference)
+  pairs <- list(
+    name        = rep(paste0(comparator, "_vs_", args$reference), 2L),
+    treatment_a = rep(comparator, 2L),
+    treatment_b = rep(args$reference, 2L),
+    op          = c("-", "/")
+  )
+
+  # 3. Compute the long-format contrast table across methods. Bootstrap
+  #    bands are produced per replicate inside compute_contrast_table()
+  #    and reduced to alpha/2 + 1-alpha/2 quantiles. (See below.)
+  out_df <- compute_contrast_table(args$fit, pairs, args$ci)
+
+  # 4. Snap user-supplied `time` to the reporting grid; filter to that
+  #    single k. `time = NULL` resolves to the final cut time per spec §3.4.
+  t_at <- snap_time(time, args$fit$cut_times)
+  out_df <- out_df[out_df$time == t_at, , drop = FALSE]
+
+  # 5. Assemble S3 output.
+  structure(
+    list(
+      contrasts = out_df,
+      method    = args$fit$method,
+      alpha     = if (!is.null(args$ci)) args$ci$alpha else NULL,
+      time      = t_at
+    ),
+    class = "causal_survival_contrast"
+  )
+}
+
+
+# ----------------------------------------------------------------------------
+# Internal helpers for causal_contrast(): validation. Plumbing lives here
+# so the public API body stays a 5-tile pipeline.
+# ----------------------------------------------------------------------------
+
+#' Validate and canonicalize `causal_contrast()` arguments
+#'
+#' Runs the four validation steps the public function used to do
+#' inline: fit class check; `ci` handling (emits the loud "contrasts
+#' without uncertainty are not meaningful" warning when `ci = NULL`,
+#' otherwise checks its class); v0.1.0 guard on the not-yet-supported
+#' `contrasts` custom list; binary-treatment check + reference-arm
+#' default (`NULL` resolves to `min(treatment_levels)`). Returns a
+#' canonical args list with `fit`, `ci`, the resolved `reference`,
+#' and `levels_vec` (used by the public function to derive the
+#' comparator arm).
+#'
+#' @keywords internal
+.validate_causal_contrast_args <- function(fit, reference, contrasts, ci) {
   stopifnot(inherits(fit, "causal_survival_fit"))
 
   if (is.null(ci)) {
@@ -100,30 +160,7 @@ causal_contrast <- function(fit, reference = NULL, contrasts = NULL,
          paste(levels_vec, collapse = ", "), ".", call. = FALSE)
   }
 
-  # Binary inline expansion: one pair, both operators.
-  comparator <- setdiff(levels_vec, reference)
-  pairs <- list(
-    name        = rep(paste0(comparator, "_vs_", reference), 2L),
-    treatment_a = rep(comparator, 2L),
-    treatment_b = rep(reference, 2L),
-    op          = c("-", "/")
-  )
-
-  out_df <- compute_contrast_table(fit, pairs, ci)
-
-  # Spec §3.4: `time = NULL` resolves to the final cut time.
-  t_at <- snap_time(time, fit$cut_times)
-  out_df <- out_df[out_df$time == t_at, , drop = FALSE]
-
-  structure(
-    list(
-      contrasts = out_df,
-      method    = fit$method,
-      alpha     = if (!is.null(ci)) ci$alpha else NULL,
-      time      = t_at
-    ),
-    class = "causal_survival_contrast"
-  )
+  list(fit = fit, ci = ci, reference = reference, levels_vec = levels_vec)
 }
 
 

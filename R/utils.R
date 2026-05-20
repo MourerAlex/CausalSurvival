@@ -65,3 +65,39 @@ make_estimates_long <- function(cif_by_arm, cut_times) {
     inc       = c(    cif_by_arm[[1]],     cif_by_arm[[2]])
   )
 }
+
+
+#' Resolve a user-supplied time to the reporting grid
+#'
+#' Used by [causal_contrast()] and [summary.causal_survival_fit()] to
+#' interpret the optional `time` argument. `NULL` resolves to the
+#' final cut time. A numeric value outside `[min(cut_times),
+#' max(cut_times)]` is rejected with a hard error (spec §3.5). An
+#' in-bounds value is snapped to the nearest entry of `cut_times`;
+#' a `message()` is emitted if snapping changes it.
+#'
+#' @param time `NULL` or a numeric scalar.
+#' @param cut_times Numeric vector of available cut times.
+#' @return A single numeric value drawn from `cut_times`.
+#' @family internal
+#' @keywords internal
+snap_time <- function(time, cut_times) {
+  if (is.null(time)) return(max(cut_times))
+  if (!is.numeric(time) || length(time) != 1L || is.na(time)) {
+    stop("`time` must be NULL or a single non-missing numeric.",
+         call. = FALSE)
+  }
+  if (time > max(cut_times) || time < min(cut_times)) {
+    stop(sprintf(
+      "`time = %g` is outside the reporting grid [%g, %g].",
+      time, min(cut_times), max(cut_times)
+    ), call. = FALSE)
+  }
+  idx <- which.min(abs(cut_times - time))
+  k_at <- cut_times[idx]
+  if (!isTRUE(all.equal(k_at, time))) {
+    message(sprintf("`time = %g` snapped to nearest cut time: %g.",
+                    time, k_at))
+  }
+  k_at
+}

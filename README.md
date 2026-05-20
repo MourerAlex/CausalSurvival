@@ -46,7 +46,6 @@ print(fit_i)
 fit_m <- causal_survival(pt, method = "ipw", truncate = c(0.01, 0.99),
                          .ipw_estimator = "msm")
 print(fit_m)
-summary(fit_m, ci = boot_g)
 
 # --- Accessors --------------------------------------------------------------
 print(causal_risk(fit_g, "incidence"))

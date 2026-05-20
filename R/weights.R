@@ -177,6 +177,8 @@ ipw_cens <- function(model_full, pt_data, id_col, model_num = NULL) {
 #' @keywords internal
 apply_weight_truncation <- function(pt_data, id_col, truncate = NULL) {
 
+  # 1. Build the empty flagged_log scaffold used in both the no-op and
+  #    no-flag-fired return paths.
   empty_log <- data.frame(
     id     = pt_data[[id_col]][0],
     weight = character(0),
@@ -186,6 +188,7 @@ apply_weight_truncation <- function(pt_data, id_col, truncate = NULL) {
     row.names = NULL
   )
 
+  # 2. Early return when truncation is not requested.
   if (is.null(truncate)) {
     return(list(
       pt_data     = pt_data,
@@ -194,8 +197,11 @@ apply_weight_truncation <- function(pt_data, id_col, truncate = NULL) {
     ))
   }
 
+  # 3. Per-column truncation loop. For each present weight column
+  #    (`w_cens`, `w_a`): compute the percentile bounds, find rows whose
+  #    weight is outside, log them BEFORE clipping (so the log carries
+  #    raw extreme values), then symmetric-clip (Cole & Hernán 2008).
   w_cols <- intersect(c("w_cens", "w_a"), names(pt_data))
-
   log_rows <- list()
   for (wc in w_cols) {
     qs <- stats::quantile(pt_data[[wc]], probs = truncate, na.rm = TRUE)
@@ -215,16 +221,18 @@ apply_weight_truncation <- function(pt_data, id_col, truncate = NULL) {
         stringsAsFactors = FALSE,
         row.names = NULL
       )
-      # Symmetric clip (Cole & Hernán 2008)
       pt_data[[wc]] <- pmin(pmax(pt_data[[wc]], lower_val), upper_val)
     }
   }
 
+  # 4. Aggregate the per-column logs; compute flagged subject id set
+  #    and total flagged row count.
   flagged_log <- if (length(log_rows) == 0) empty_log
                  else do.call(rbind, log_rows)
   flagged_ids   <- unique(flagged_log$id)
   n_flagged_rows <- nrow(flagged_log)
 
+  # 5. Emit a single grouped warning summarizing the impact.
   if (length(flagged_ids) > 0) {
     warning(
       length(flagged_ids), " subject(s) had weights truncated at ",

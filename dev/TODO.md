@@ -263,6 +263,20 @@ itself into a corner.
 - **Stabilization for time-varying `A`.** Numerator becomes
   `A_k ~ A_{k-1} + V` (Robins/Hernán §12); current marginal numerator
   collapses to a degenerate case.
+- **Fit-population restrictions baked into the hazard fitters.** Today
+  `fit_hazard_models()` restricts the Y-hazard fit to
+  `indep_cens == 0 & dep_cens == 0` rows and the C-hazard fit to
+  `indep_cens == 0` rows; `fit_ipw_msm()` and `fit_ipw_km()` use the
+  same masks for the weighted Y-MSM / KM fits. These masks assume the
+  three-way censoring split is row-level immutable (the indep/dep
+  label travels with each at-risk row through follow-up). Under
+  time-varying covariates or treatment, the label may become
+  time-varying (a subject's censoring mechanism could switch reasons
+  mid-follow-up). The current hard-coded masks would silently
+  mis-restrict. v2 needs an explicit feature gate — a `cens_split`
+  arg, per-row labels, or a flag that toggles between the v1 baseline-
+  immutable convention and a future time-varying one — before the
+  time-varying refactor.
 
 Defer all of the above to v2 — flag in roxygen / spec when v1 code
 makes a baseline-only assumption that v2 will need to relax.
@@ -309,6 +323,38 @@ Rewrite the description + `@details` to lead with
 `E[Y_k^{a, c = 0}]` (or equivalently the cumulative incidence
 `F^a(t) = P(T^a \le t, C^{d,a} = 0)`) and demote `S^a(t)` to a
 secondary view.
+
+---
+
+## Methodology vocabulary audit — survey-sampling vs survival register
+
+The package occasionally uses methodologically-correct but pedagogically
+heavy register from survey-sampling literature (e.g. "Hájek pooled-hazard
+estimator") where the survival / causal-inference literature uses simpler
+canonical names (e.g. "weighted Kaplan-Meier" / "IPW KM" — Hernán & Robins
+ch. 17; Cole & Hernán 2004).
+
+**Already done (2026-05-19)**: replaced "Hájek pooled-hazard estimator"
+with "weighted pooled-hazard Kaplan-Meier estimator" across `R/*.R` files.
+The Hájek qualifier is technically accurate (denominator = sum of weights
+vs Horvitz-Thompson's N) but unfamiliar in survival writing. Removal is a
+readability win, not a correctness fix. See
+`memory/project_methodology_vocabulary.md` for the rationale.
+
+**TODO**: do a fresh scan across `R/*.R` and roxygen for other terms that
+may carry the same register mismatch. Candidates to check:
+
+- Mathematical notation choices that lean survey-sampling rather than
+  survival (e.g. explicit ratio-estimator notation where a hazard/CIF
+  formulation would read more naturally to the target audience).
+- Any place where a less-familiar canonical name is used when a standard
+  H&R / Andersen-Ravn / Geskus term exists.
+- Internal column naming (`y_event`, `dep_cens`, `indep_cens`, etc.) —
+  these are package-internal and intentionally explicit; do NOT rename
+  without a separate rule-change pass.
+
+Apply replacements `.R`-side only (dev/*.md mentions stay until a
+documentation sweep).
 
 ---
 

@@ -15,9 +15,9 @@ print.causal_survival_fit <- function(x, ...) {
       "conditional on baseline L_0\n", sep = "")
   cat("See `causal_assumptions(fit)` for the full identification block.\n")
 
-  engine_str <- if (x$method == "ipw")
-    paste0(" (engine: ", x$ipw_engine, ")") else ""
-  cat("Method: ", x$method, engine_str, "\n", sep = "")
+  estimator_str <- if (x$method == "ipw")
+    paste0(" (estimator: ", x$ipw_estimator, ")") else ""
+  cat("Method: ", x$method, estimator_str, "\n", sep = "")
   cat("N subjects: ", length(unique(x$pt_data[[x$id_col]])), "\n", sep = "")
   cat("Cut times: ", length(x$cut_times),
       " (T_max = ", max(x$cut_times), ")\n", sep = "")
@@ -88,9 +88,9 @@ summary.causal_survival_fit <- function(object, ci = NULL,
 
   cat("Counterfactual survival - summary\n")
   cat("=================================\n\n")
-  engine_str <- if (object$method == "ipw")
-    paste0(" (engine: ", object$ipw_engine, ")") else ""
-  cat("Method: ", object$method, engine_str,
+  estimator_str <- if (object$method == "ipw")
+    paste0(" (estimator: ", object$ipw_estimator, ")") else ""
+  cat("Method: ", object$method, estimator_str,
       " | N: ", length(unique(object$pt_data[[object$id_col]])),
       "\n", sep = "")
   cat("Cut times: ", length(object$cut_times),

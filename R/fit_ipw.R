@@ -213,7 +213,7 @@ fit_ipw_msm <- function(pt_data, id_col, treatment_col, covariates_vec,
   # Default Y-MSM is marginal in covariates: weights handle confounding,
   # so no covariate adjustment in the outcome model. Users can supply
   # `formulas$y` for a covariate-conditional MSM.
-  # Fit population: rows with indep_cens == 0 & dep_cens == 0 (spec §3.0.6).
+  # Fit population: rows with indep_cens == 0 & dep_cens == 0.
   time_terms <- "k + I(k^2) + I(k^3)"
   fml_y <- formulas$y %||% stats::as.formula(
     paste("y_event ~",
@@ -324,8 +324,8 @@ fit_ipw_km <- function(pt_data, id_col, treatment_col, covariates_vec,
   pt_data <- w_out$pt_data
 
   # ---------- 6. Weighted pooled hazard per arm (Kaplan-Meier-style) ----------
-  # Fit population (per spec §3.0.6 / §1 KM symmetry with the Y-MSM
-  # fit): rows with indep_cens == 0 & dep_cens == 0.
+  # Fit population: rows with indep_cens == 0 & dep_cens == 0 (KM
+  # symmetry with the Y-MSM fit).
   cif_by_arm <- lapply(c(0, 1), function(a) {
     arm_rows <- pt_data[
       pt_data[[treatment_col]] == a &

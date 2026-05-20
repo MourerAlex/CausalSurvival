@@ -263,6 +263,20 @@ itself into a corner.
 - **Stabilization for time-varying `A`.** Numerator becomes
   `A_k ~ A_{k-1} + V` (Robins/Hernán §12); current marginal numerator
   collapses to a degenerate case.
+- **Fit-population restrictions baked into the hazard fitters.** Today
+  `fit_hazard_models()` restricts the Y-hazard fit to
+  `indep_cens == 0 & dep_cens == 0` rows and the C-hazard fit to
+  `indep_cens == 0` rows; `fit_ipw_msm()` and `fit_ipw_km()` use the
+  same masks for the weighted Y-MSM / KM fits. These masks assume the
+  three-way censoring split is row-level immutable (the indep/dep
+  label travels with each at-risk row through follow-up). Under
+  time-varying covariates or treatment, the label may become
+  time-varying (a subject's censoring mechanism could switch reasons
+  mid-follow-up). The current hard-coded masks would silently
+  mis-restrict. v2 needs an explicit feature gate — a `cens_split`
+  arg, per-row labels, or a flag that toggles between the v1 baseline-
+  immutable convention and a future time-varying one — before the
+  time-varying refactor.
 
 Defer all of the above to v2 — flag in roxygen / spec when v1 code
 makes a baseline-only assumption that v2 will need to relax.

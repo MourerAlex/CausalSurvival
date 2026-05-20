@@ -28,6 +28,7 @@ check_fitted_positivity <- function(model, model_label,
                                     warn_eps = 1e-6,
                                     glm_warnings = character()) {
 
+  # 1. Convergence: warn (but proceed) when glm() reported non-convergence.
   converged <- isTRUE(model$converged)
   if (!converged) {
     warning(
@@ -36,8 +37,10 @@ check_fitted_positivity <- function(model, model_label,
     )
   }
 
+  # 2. NA fitted guard: when any fitted probability is NA the fit has
+  #    effectively failed; warn and short-circuit with NA min/max so the
+  #    caller can detect failure without re-checking the model object.
   probs <- stats::fitted(model)
-
   if (any(is.na(probs))) {
     warning(
       model_label, " model has NA fitted values - fit may have failed.",
@@ -52,12 +55,12 @@ check_fitted_positivity <- function(model, model_label,
     ))
   }
 
+  # 3. Continuous positivity signal: min/max of fitted probabilities.
+  #    Warn when either extreme falls in [0, warn_eps] or [1-warn_eps, 1].
+  #    No binary "violation" flag is stored — the user interprets the
+  #    continuous extremes; any cutoff would be arbitrary.
   min_p <- min(probs)
   max_p <- max(probs)
-
-  # Warn about extreme probabilities (user interprets what "extreme" means).
-  # No binary positivity-violation flag is stored — the min/max are the
-  # continuous signal, and any cutoff would be arbitrary.
   if (min_p < warn_eps || max_p > 1 - warn_eps) {
     warning(
       model_label,
@@ -68,6 +71,7 @@ check_fitted_positivity <- function(model, model_label,
     )
   }
 
+  # 4. Return diagnostics.
   list(
     label = model_label,
     converged = converged,
@@ -101,13 +105,21 @@ check_fitted_positivity <- function(model, model_label,
 #' @return A list with `model` (the glm object) and `check` (diagnostics).
 #' @keywords internal
 fit_logistic <- function(formula, data, label, weights = NULL) {
-  glm_warnings <- character()
 
+  # 1. Warning capture state: collect any glm() warnings into a vector via
+  #    a calling handler that muffles them at the source, so they can be
+  #    re-emitted as a single batch after the fit succeeds.
+  glm_warnings <- character()
   handler <- function(w) {
     glm_warnings <<- c(glm_warnings, conditionMessage(w))
     invokeRestart("muffleWarning")
   }
 
+  # 2. Fit the binomial logistic glm. The weighted branch (used only by
+  #    fit_ipw_msm() for the weighted Y-MSM fit) stashes the user-supplied
+  #    vector on `data` under an internal column name and references it
+  #    by NSE (sidestepping the `weights` formal); the unweighted branch
+  #    fits without any case-weight arg.
   if (is.null(weights)) {
     model <- withCallingHandlers(
       stats::glm(formula, data = data,
@@ -129,9 +141,10 @@ fit_logistic <- function(formula, data, label, weights = NULL) {
     )
   }
 
-  # Re-emit glm warnings so they are collected by the calling fitter's handler
+  # 3. Re-emit collected glm warnings so they are visible to the calling
+  #    fitter's own warning collector; then build the per-model
+  #    diagnostics list via check_fitted_positivity().
   for (w in glm_warnings) warning(w, call. = FALSE)
-
   check <- check_fitted_positivity(model, label, glm_warnings = glm_warnings)
 
   list(model = model, check = check)
@@ -219,7 +232,7 @@ predict_counterfactual_hazard <- function(model, data, treatment_var,
 #' the LOCKED `(0, t_1], ..., (t_{K_max-1}, T_max]` convention from spec
 #' §3.0.2 — `k` is the interval index, not its left-edge time.
 #'
-#' Fit populations follow spec §3.0.6:
+#' Fit populations:
 #' - Y-hazard (`y_event ~ ...`): rows with `indep_cens == 0 & dep_cens == 0`.
 #' - C-hazard (`dep_cens ~ ...`): rows with `indep_cens == 0`.
 #'
@@ -233,6 +246,7 @@ fit_hazard_models <- function(pt_data,
                               formulas,
                               ipcw = TRUE) {
 
+  # Default formula RHS shared between Y- and C-hazard models.
   cov_terms <- if (length(covariates) > 0) {
     paste(covariates, collapse = " + ")
   } else {
@@ -243,8 +257,9 @@ fit_hazard_models <- function(pt_data,
   models <- list(model_y = NULL, model_c = NULL)
   checks <- list(y = NULL, c = NULL)
 
-  # --- Y-hazard model (g-formula path; IPW-MSM Y fit is weighted, done later) ---
-  # Fit population: rows with indep_cens == 0 AND dep_cens == 0 (spec §3.0.6).
+  # 1. Y-hazard model (g-formula path; the IPW-MSM Y fit is weighted and
+  #    happens later in fit_ipw_msm()). Fit population: rows with
+  #    indep_cens == 0 AND dep_cens == 0.
   if ("gformula" %in% active_methods) {
     y_rows <- pt_data$indep_cens == 0 & pt_data$dep_cens == 0
     fml_y <- formulas$y %||% stats::as.formula(
@@ -257,10 +272,8 @@ fit_hazard_models <- function(pt_data,
     checks$y <- fit_result$check
   }
 
-  # --- Censoring model (IPW path with ipcw) ---
-  # Fit population: rows with indep_cens == 0 (spec §3.0.6). The
-  # structural exclusion of indep_cens == 1 rows is what makes the
-  # IPCW cliff impossible (no admin-style rows in the fit).
+  # 2. Censoring (C-)hazard model (IPW path with ipcw). Fit population:
+  #    rows with indep_cens == 0.
   if ("ipw" %in% active_methods && ipcw) {
     c_rows <- pt_data$indep_cens == 0
     fml_c <- formulas$c %||% stats::as.formula(
